@@ -96,6 +96,20 @@ func (t *VersionTable) LookupPair(minor string) string {
 	return ""
 }
 
+// BranchForPair is the inverse of LookupPair: given a pair value (a leaf's
+// minor, e.g. "v2.13"), return this paired-repo's branch that ships against
+// it. Empty string if not found. Used by the manual-bump fan-out: caller
+// picks a leaf branch, we resolve each paired dependent to its matching
+// branch via this lookup.
+func (t *VersionTable) BranchForPair(pair string) string {
+	for _, r := range t.Rows {
+		if r.Pair == pair {
+			return r.Branch
+		}
+	}
+	return ""
+}
+
 // isSeparatorRow matches "|---|---|---|" with optional spaces and colons.
 func isSeparatorRow(line string) bool {
 	cells := splitRow(line)

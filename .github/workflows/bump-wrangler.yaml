@@ -1,0 +1,67 @@
+name: Bump wrangler
+
+# Manual entrypoint for landing a wrangler version across every repo that
+# ships against a chosen rancher branch.
+#
+# wrangler is `kind: independent` in dependencies.yaml — pass 1 only auto-PRs
+# `main` on every dependent. Older `release/*` lines must be bumped on
+# request: open this workflow in the Actions tab, fill in the wrangler
+# version and the rancher branch, hit Run. The reconciler resolves the
+# downstream set itself (rancher direct, paired components via VERSION.md
+# Pair-column lookup) and opens a bump PR per resolved (repo, branch).
+#
+# `dep` is intentionally NOT an input — one workflow per dep keeps the UI
+# obvious ("Bump wrangler") and the dispatch surface narrow. Copy this file
+# to bump-<other>.yaml when wrangler stops being our only independent dep.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'wrangler version (e.g. v0.5.1)'
+        required: true
+        type: string
+      rancher_branch:
+        description: 'rancher branch to fan out across (e.g. main, release/v2.13)'
+        required: true
+        type: string
+
+# Share the reconciler lock — bump-dep mutates the same trackers that cron
+# and tag-emitted touch, so two runs must not race.
+concurrency:
+  group: reconciler
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Run reconciler (bump-dep)
+        # Inputs flow in via env to keep them out of the rendered shell —
+        # values are user-controlled and we don't want them interpreted as
+        # shell.
+        env:
+          AUTOMATION_REPO: ${{ github.repository }}
+          GH_BOT_TOKEN: ${{ secrets.GH_BOT_TOKEN }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
+          VERSION: ${{ inputs.version }}
+          RANCHER_BRANCH: ${{ inputs.rancher_branch }}
+        run: |
+          go run ./cmd/reconciler \
+            -mode=bump-dep \
+            -dep=wrangler \
+            -version="$VERSION" \
+            -leaf-branch="$RANCHER_BRANCH"

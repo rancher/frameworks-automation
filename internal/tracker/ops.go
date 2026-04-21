@@ -119,20 +119,27 @@ func Supersede(ctx context.Context, gh *ghclient.Client, automationRepo string, 
 	return nil
 }
 
-// mergeState copies PR/state info from a stored Persistent block back into op.
-// Matches by (Repo, Branch). Existing op.Targets entries are preserved if the
-// stored state has no matching row (so newly-added targets show up).
+// mergeState reconciles op.Targets with what's already stored in the tracker.
+// Union semantics: PR/state from `st` overlays matching op.Targets entries,
+// AND stored targets not present in op.Targets are appended.
+//
+// The append path matters for manual `Bump dep` runs (RunBumpDep): the caller
+// builds an Op with one target — the manual one — and we need to keep the
+// auto-bumped targets that an earlier dispatch wrote. Without the append, a
+// manual bump would clobber the tracker.
 func mergeState(op *Op, st Persistent) {
-	known := make(map[string]Target, len(st.Targets))
-	for _, t := range st.Targets {
-		known[t.Repo+"|"+t.Branch] = t
-	}
+	inOp := make(map[string]int, len(op.Targets))
 	for i, t := range op.Targets {
-		if k, ok := known[t.Repo+"|"+t.Branch]; ok {
+		inOp[t.Repo+"|"+t.Branch] = i
+	}
+	for _, k := range st.Targets {
+		if i, ok := inOp[k.Repo+"|"+k.Branch]; ok {
 			op.Targets[i].PR = k.PR
 			op.Targets[i].PRURL = k.PRURL
 			op.Targets[i].State = k.State
+			continue
 		}
+		op.Targets = append(op.Targets, k)
 	}
 }
 

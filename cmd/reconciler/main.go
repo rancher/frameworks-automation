@@ -1,11 +1,16 @@
-// Reconciler entrypoint. Invoked by .github/workflows/reconciler.yml (cron)
-// and .github/workflows/tag-emitted.yml (repository_dispatch).
+// Reconciler entrypoint. Invoked by .github/workflows/reconciler.yml (cron),
+// .github/workflows/tag-emitted.yml (repository_dispatch), and the per-dep
+// .github/workflows/bump-<dep>.yml manual workflows.
 //
 // Mode selects the entry path:
 //
 //	-mode=cron      Full sweep: passes 1-4 over every upstream/downstream pair.
 //	-mode=dispatch  Scoped to a single just-emitted tag. Skips the upstream
 //	                discovery (passes 2-4 still run for completeness).
+//	-mode=bump-dep  Manual fan-out of one (dep, version) across every repo
+//	                that ships against a chosen leaf branch — used for the
+//	                independent-lib release/* case where the auto path
+//	                only touches `main`.
 package main
 
 import (
@@ -21,11 +26,14 @@ import (
 
 func main() {
 	var (
-		mode       = flag.String("mode", "cron", "cron|dispatch")
+		mode       = flag.String("mode", "cron", "cron|dispatch|bump-dep")
 		configPath = flag.String("config", "dependencies.yaml", "path to dependencies.yaml")
 		repo       = flag.String("repo", "", "dispatch mode: owner/name of repo that emitted the tag")
 		tag        = flag.String("tag", "", "dispatch mode: tag that was emitted (e.g. v0.7.5)")
 		sha        = flag.String("sha", "", "dispatch mode: commit SHA the tag points at")
+		dep        = flag.String("dep", "", "bump-dep mode: dep config key (e.g. wrangler)")
+		version    = flag.String("version", "", "bump-dep mode: version to bump to (e.g. v0.5.1)")
+		leafBranch = flag.String("leaf-branch", "", "bump-dep mode: leaf-repo branch to fan out across (e.g. release/v2.13)")
 	)
 	flag.Parse()
 
@@ -51,6 +59,13 @@ func main() {
 		}
 		if err := r.RunDispatch(ctx, reconcile.DispatchEvent{Repo: *repo, Tag: *tag, SHA: *sha}); err != nil {
 			log.Fatalf("dispatch: %v", err)
+		}
+	case "bump-dep":
+		if *dep == "" || *version == "" || *leafBranch == "" {
+			log.Fatalf("bump-dep: -dep, -version, -leaf-branch are all required")
+		}
+		if err := r.RunBumpDep(ctx, *dep, *version, *leafBranch); err != nil {
+			log.Fatalf("bump-dep: %v", err)
 		}
 	default:
 		log.Fatalf("unknown mode %q", *mode)

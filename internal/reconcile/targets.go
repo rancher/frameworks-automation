@@ -90,3 +90,71 @@ func ComputeTargets(
 		return nil, fmt.Errorf("dep %q: unknown kind %q", dep, r.Kind)
 	}
 }
+
+// ComputeTargetsForLeafBranch is the inverse axis: caller picks a leaf
+// branch (e.g. rancher release/v2.13) and we fan out to every dependent of
+// `dep` that ships against that leaf branch. Used by the manual `Bump X`
+// workflows for the kind=independent older-branch case where the auto path
+// in pass 1 would only touch `main`.
+//
+// Mapping per dependent of `dep`:
+//
+//	leaf itself          target leafBranch directly.
+//	paired downstream    look up the row in its VERSION.md whose Pair column
+//	                     matches the leaf's minor for leafBranch; that row's
+//	                     Branch is the target. If no such row exists the
+//	                     dependent is skipped (it doesn't ship against this
+//	                     leaf line yet).
+//	independent          skipped — independents have no per-leaf-branch
+//	                     mapping. The user must run a separate manual bump
+//	                     for each branch they want to land on.
+func ComputeTargetsForLeafBranch(
+	cfg *config.Config,
+	dep, leafRepo, leafBranch string,
+	leafTable *config.VersionTable,
+	dependentTables map[string]*config.VersionTable,
+) ([]Target, error) {
+	if _, ok := cfg.Repos[dep]; !ok {
+		return nil, fmt.Errorf("dep %q not in config", dep)
+	}
+	leaf, ok := cfg.Repos[leafRepo]
+	if !ok {
+		return nil, fmt.Errorf("leaf %q not in config", leafRepo)
+	}
+	if leaf.Kind != config.KindLeaf {
+		return nil, fmt.Errorf("repo %q is not a leaf", leafRepo)
+	}
+	if leafTable == nil {
+		return nil, fmt.Errorf("leaf %q: missing VERSION.md table", leafRepo)
+	}
+	leafMinor := leafTable.LookupMinor(leafBranch)
+	if leafMinor == "" {
+		return nil, fmt.Errorf("leaf %q: branch %q not in VERSION.md", leafRepo, leafBranch)
+	}
+
+	dependents := cfg.Dependents(dep)
+	out := make([]Target, 0, len(dependents))
+	for _, d := range dependents {
+		if d == leafRepo {
+			out = append(out, Target{Repo: d, Branch: leafBranch})
+			continue
+		}
+		switch cfg.Repos[d].Kind {
+		case config.KindPaired:
+			tbl, ok := dependentTables[d]
+			if !ok || tbl == nil {
+				return nil, fmt.Errorf("paired dependent %q: missing VERSION.md table", d)
+			}
+			branch := tbl.BranchForPair(leafMinor)
+			if branch == "" {
+				continue
+			}
+			out = append(out, Target{Repo: d, Branch: branch})
+		case config.KindIndependent, config.KindLeaf:
+			// independents have no leaf-branch mapping; another leaf is not
+			// expected in the current single-leaf DAG.
+			continue
+		}
+	}
+	return out, nil
+}

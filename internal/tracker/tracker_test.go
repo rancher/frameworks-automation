@@ -114,6 +114,43 @@ func TestMergeState_PreservesOpTargetsAndOverlaysPR(t *testing.T) {
 	}
 }
 
+// TestMergeState_AppendsStoredOnlyTargets covers the manual-bump path: the
+// caller's Op has only the manual target, but the tracker already knows about
+// auto-bumped targets from an earlier dispatch. Those must survive.
+func TestMergeState_AppendsStoredOnlyTargets(t *testing.T) {
+	op := Op{
+		Dep:     "wrangler",
+		Version: "v0.5.1",
+		Targets: []Target{
+			// Caller (RunBumpDep) only knows about the one branch the user
+			// asked for.
+			{Repo: "rancher", Branch: "release/v2.13"},
+		},
+	}
+	stored := Persistent{
+		Targets: []Target{
+			{Repo: "rancher", Branch: "main", PR: 10, PRURL: "https://github.com/x/y/pull/10", State: "open"},
+			{Repo: "steve", Branch: "main", PR: 11, PRURL: "https://github.com/x/y/pull/11", State: "merged"},
+		},
+	}
+	mergeState(&op, stored)
+	if len(op.Targets) != 3 {
+		t.Fatalf("want 3 targets after union merge, got %d: %+v", len(op.Targets), op.Targets)
+	}
+	// Caller-supplied target stays first, no PR on it yet.
+	if op.Targets[0].Repo != "rancher" || op.Targets[0].Branch != "release/v2.13" || op.Targets[0].PR != 0 {
+		t.Errorf("caller target not preserved: %+v", op.Targets[0])
+	}
+	// Stored-only targets appended.
+	got := map[string]Target{
+		op.Targets[1].Repo + "|" + op.Targets[1].Branch: op.Targets[1],
+		op.Targets[2].Repo + "|" + op.Targets[2].Branch: op.Targets[2],
+	}
+	if got["rancher|main"].PR != 10 || got["steve|main"].State != "merged" {
+		t.Errorf("appended targets wrong: %+v", op.Targets[1:])
+	}
+}
+
 func TestRenderRef(t *testing.T) {
 	cases := []struct {
 		name string
