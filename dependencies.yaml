@@ -1,0 +1,37 @@
+# Source of truth for the dependency DAG and per-repo policy.
+#
+# kind:
+#   leaf        - final consumer (rancher). Receives bump PRs; never bumped
+#                 into anything else.
+#   paired      - follows VERSION.md mapping to a rancher minor. Bump PRs go
+#                 to the branch whose VERSION.md row matches the upstream
+#                 minor (e.g. steve release/v0.7 ↔ rancher release/v2.13).
+#   independent - no rancher pairing. Bump PRs auto-open on `main` only;
+#                 release/* branches get Slack-only notice and require the
+#                 per-repo `Bump dep` workflow for older-branch bumps.
+#
+# module: the Go module path. Used by `go get module@version` in bump PRs and
+# to grep `go.mod` in downstreams.
+#
+# deps: upstream repos this repo depends on. Drives the reconciler's "new
+# release of X means open PRs in Y" logic.
+#
+# Playground configuration: points at the tomleb/frameworks-automation-*
+# scratch repos. Swap for the real rancher/* modules once the loop is proven.
+
+repos:
+  rancher:
+    kind: leaf
+    module: github.com/tomleb/frameworks-automation-rancher
+    deps:
+      - steve
+      - wrangler
+  steve:
+    kind: paired
+    module: github.com/tomleb/frameworks-automation-steve
+    deps:
+      - wrangler
+  wrangler:
+    kind: independent
+    module: github.com/tomleb/frameworks-automation-wrangler
+    deps: []

@@ -1,0 +1,285 @@
+// Package github wraps the go-github SDK with the focused surface the
+// reconciler needs: fetching files (VERSION.md, go.mod), tracker-issue CRUD
+// keyed by labels, and bump-PR open/close.
+//
+// All methods take an `owner/name` string for convenience — split internally.
+package github
+
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	gh "github.com/google/go-github/v66/github"
+	"golang.org/x/oauth2"
+)
+
+type Client struct {
+	gh *gh.Client
+}
+
+func NewClient(ctx context.Context, token string) *Client {
+	if token == "" {
+		return &Client{gh: gh.NewClient(nil)}
+	}
+	tc := oauth2.NewClient(ctx, oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token}))
+	return &Client{gh: gh.NewClient(tc)}
+}
+
+// FetchFile returns the decoded contents of `path` in `repo` at `ref`. `ref`
+// may be a branch name, tag, or SHA; empty means the default branch.
+func (c *Client) FetchFile(ctx context.Context, repo, ref, path string) (string, error) {
+	owner, name, err := splitRepo(repo)
+	if err != nil {
+		return "", err
+	}
+	var opt *gh.RepositoryContentGetOptions
+	if ref != "" {
+		opt = &gh.RepositoryContentGetOptions{Ref: ref}
+	}
+	f, _, _, err := c.gh.Repositories.GetContents(ctx, owner, name, path, opt)
+	if err != nil {
+		return "", fmt.Errorf("get %s/%s@%s: %w", repo, path, ref, err)
+	}
+	if f == nil {
+		return "", fmt.Errorf("get %s/%s@%s: not a file", repo, path, ref)
+	}
+	s, err := f.GetContent()
+	if err != nil {
+		return "", fmt.Errorf("decode %s/%s@%s: %w", repo, path, ref, err)
+	}
+	return s, nil
+}
+
+// GetLatestReleaseTag returns the tag string of the latest published release
+// (excluding drafts and pre-releases — that's what the GitHub API itself
+// considers "latest"). Returns ("", nil) if the repo has no releases yet.
+func (c *Client) GetLatestReleaseTag(ctx context.Context, repo string) (string, error) {
+	owner, name, err := splitRepo(repo)
+	if err != nil {
+		return "", err
+	}
+	rel, resp, err := c.gh.Repositories.GetLatestRelease(ctx, owner, name)
+	if err != nil {
+		if resp != nil && resp.StatusCode == 404 {
+			return "", nil
+		}
+		return "", fmt.Errorf("latest release %s: %w", repo, err)
+	}
+	return rel.GetTagName(), nil
+}
+
+type Issue struct {
+	Number int
+	Title  string
+	Body   string
+	State  string // "open" | "closed"
+	Labels []string
+	URL    string // HTML URL, for cross-linking
+}
+
+// ListOpenIssues returns OPEN non-PR issues in `repo` matching every label
+// in `labels`. Used both to find a specific tracker (caller filters by title)
+// and to scan for older trackers of the same dep when superseding.
+func (c *Client) ListOpenIssues(ctx context.Context, repo string, labels []string) ([]*Issue, error) {
+	return c.listIssues(ctx, repo, labels, "open")
+}
+
+// ListIssuesAllStates is like ListOpenIssues but includes closed issues. Used
+// by pass 1 cron to detect "have we already processed this version" — open
+// trackers alone aren't enough, since pass 2 closes them on completion.
+func (c *Client) ListIssuesAllStates(ctx context.Context, repo string, labels []string) ([]*Issue, error) {
+	return c.listIssues(ctx, repo, labels, "all")
+}
+
+func (c *Client) listIssues(ctx context.Context, repo string, labels []string, state string) ([]*Issue, error) {
+	owner, name, err := splitRepo(repo)
+	if err != nil {
+		return nil, err
+	}
+	issues, _, err := c.gh.Issues.ListByRepo(ctx, owner, name, &gh.IssueListByRepoOptions{
+		Labels:      labels,
+		State:       state,
+		ListOptions: gh.ListOptions{PerPage: 100},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list issues %s labels=%v state=%s: %w", repo, labels, state, err)
+	}
+	out := make([]*Issue, 0, len(issues))
+	for _, i := range issues {
+		// ListByRepo returns PRs too; filter them out.
+		if i.IsPullRequest() {
+			continue
+		}
+		out = append(out, toIssue(i))
+	}
+	return out, nil
+}
+
+func (c *Client) CreateIssue(ctx context.Context, repo, title, body string, labels []string) (*Issue, error) {
+	owner, name, err := splitRepo(repo)
+	if err != nil {
+		return nil, err
+	}
+	issue, _, err := c.gh.Issues.Create(ctx, owner, name, &gh.IssueRequest{
+		Title:  &title,
+		Body:   &body,
+		Labels: &labels,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create issue in %s: %w", repo, err)
+	}
+	return toIssue(issue), nil
+}
+
+func (c *Client) UpdateIssueBody(ctx context.Context, repo string, number int, body string) error {
+	owner, name, err := splitRepo(repo)
+	if err != nil {
+		return err
+	}
+	_, _, err = c.gh.Issues.Edit(ctx, owner, name, number, &gh.IssueRequest{Body: &body})
+	if err != nil {
+		return fmt.Errorf("edit issue %s#%d: %w", repo, number, err)
+	}
+	return nil
+}
+
+// CloseIssue closes the issue and posts `comment` first if non-empty (so the
+// supersede note appears before the closed marker in the timeline).
+func (c *Client) CloseIssue(ctx context.Context, repo string, number int, comment string) error {
+	owner, name, err := splitRepo(repo)
+	if err != nil {
+		return err
+	}
+	if comment != "" {
+		if _, _, err := c.gh.Issues.CreateComment(ctx, owner, name, number, &gh.IssueComment{Body: &comment}); err != nil {
+			return fmt.Errorf("comment on %s#%d before close: %w", repo, number, err)
+		}
+	}
+	state := "closed"
+	if _, _, err := c.gh.Issues.Edit(ctx, owner, name, number, &gh.IssueRequest{State: &state}); err != nil {
+		return fmt.Errorf("close issue %s#%d: %w", repo, number, err)
+	}
+	return nil
+}
+
+type PR struct {
+	Number  int
+	Title   string
+	State   string // "open" | "closed"
+	Merged  bool
+	HeadRef string
+	BaseRef string
+	URL     string // HTML URL
+}
+
+// GetPR fetches a single PR's current state. Used by pass 2 to poll
+// open trackers' linked PRs without paging the full list.
+func (c *Client) GetPR(ctx context.Context, repo string, number int) (*PR, error) {
+	owner, name, err := splitRepo(repo)
+	if err != nil {
+		return nil, err
+	}
+	pr, _, err := c.gh.PullRequests.Get(ctx, owner, name, number)
+	if err != nil {
+		return nil, fmt.Errorf("get PR %s#%d: %w", repo, number, err)
+	}
+	return toPR(pr), nil
+}
+
+// ListOpenPRsByHead returns OPEN PRs in `repo` whose head branch is `headRef`.
+// Used to dedupe: if a bump branch already has an open PR, don't open another.
+//
+// `headRef` is just the branch name (no owner: prefix) — we always push to
+// the same repo, so head is the bot's branch in `repo` itself.
+func (c *Client) ListOpenPRsByHead(ctx context.Context, repo, headRef string) ([]*PR, error) {
+	owner, name, err := splitRepo(repo)
+	if err != nil {
+		return nil, err
+	}
+	prs, _, err := c.gh.PullRequests.List(ctx, owner, name, &gh.PullRequestListOptions{
+		State: "open",
+		Head:  owner + ":" + headRef,
+		ListOptions: gh.ListOptions{PerPage: 50},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list PRs %s head=%s: %w", repo, headRef, err)
+	}
+	out := make([]*PR, 0, len(prs))
+	for _, p := range prs {
+		out = append(out, toPR(p))
+	}
+	return out, nil
+}
+
+func (c *Client) CreatePR(ctx context.Context, repo, title, body, head, base string) (*PR, error) {
+	owner, name, err := splitRepo(repo)
+	if err != nil {
+		return nil, err
+	}
+	pr, _, err := c.gh.PullRequests.Create(ctx, owner, name, &gh.NewPullRequest{
+		Title: &title,
+		Body:  &body,
+		Head:  &head,
+		Base:  &base,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create PR %s %s -> %s: %w", repo, head, base, err)
+	}
+	return toPR(pr), nil
+}
+
+// ClosePR closes the PR (does not merge). Posts `comment` first if provided
+// (used for supersede notes).
+func (c *Client) ClosePR(ctx context.Context, repo string, number int, comment string) error {
+	owner, name, err := splitRepo(repo)
+	if err != nil {
+		return err
+	}
+	if comment != "" {
+		if _, _, err := c.gh.Issues.CreateComment(ctx, owner, name, number, &gh.IssueComment{Body: &comment}); err != nil {
+			return fmt.Errorf("comment on %s#%d before close: %w", repo, number, err)
+		}
+	}
+	state := "closed"
+	if _, _, err := c.gh.PullRequests.Edit(ctx, owner, name, number, &gh.PullRequest{State: &state}); err != nil {
+		return fmt.Errorf("close PR %s#%d: %w", repo, number, err)
+	}
+	return nil
+}
+
+// --- helpers ----------------------------------------------------------------
+
+func splitRepo(repo string) (owner, name string, err error) {
+	parts := strings.SplitN(repo, "/", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", fmt.Errorf("invalid repo %q: want owner/name", repo)
+	}
+	return parts[0], parts[1], nil
+}
+
+func toIssue(i *gh.Issue) *Issue {
+	out := &Issue{
+		Number: i.GetNumber(),
+		Title:  i.GetTitle(),
+		Body:   i.GetBody(),
+		State:  i.GetState(),
+		URL:    i.GetHTMLURL(),
+	}
+	for _, l := range i.Labels {
+		out.Labels = append(out.Labels, l.GetName())
+	}
+	return out
+}
+
+func toPR(p *gh.PullRequest) *PR {
+	return &PR{
+		Number:  p.GetNumber(),
+		Title:   p.GetTitle(),
+		State:   p.GetState(),
+		Merged:  p.GetMerged(),
+		HeadRef: p.GetHead().GetRef(),
+		BaseRef: p.GetBase().GetRef(),
+		URL:     p.GetHTMLURL(),
+	}
+}
