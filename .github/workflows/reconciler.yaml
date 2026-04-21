@@ -11,7 +11,12 @@ name: Reconciler (cron)
 
 on:
   schedule:
-    - cron: '*/15 * * * *'   # every 15 min
+    # Every 15 min, deliberately staggered off `:00 :15 :30 :45`. GitHub
+    # actively delays (or silently drops) scheduled runs at the top of the
+    # hour and other "round" minutes when the cron cluster is hot — the
+    # `*/15` cadence is the most affected. Picking offset minutes avoids
+    # the hot slots and gets us close to the intended cadence in practice.
+    - cron: '7,22,37,52 * * * *'
   workflow_dispatch: {}      # allow manual kick
 
 # Serialize against tag-emitted.yaml so two reconciler runs never race on the
