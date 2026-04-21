@@ -47,22 +47,38 @@ func (r *Reconciler) checkUpstream(ctx context.Context, name string) error {
 	if !semver.IsValid(tag) {
 		return nil // not semver — out of scope
 	}
-	processed, err := r.alreadyProcessed(ctx, name, tag)
+
+	// Derive the leaf branch this auto-dispatch would target so we can
+	// check for an existing tracker on that exact (dep, version,
+	// leaf-branch). Manual bump-dep runs may have created trackers for
+	// other leaf branches; those don't count for the auto path.
+	leafBranch, err := r.deriveLeafBranchForDispatch(ctx, name, tag)
+	if err != nil {
+		return fmt.Errorf("derive leaf branch: %w", err)
+	}
+	if leafBranch == "" {
+		return nil // no matching leaf branch yet
+	}
+	leaves := r.cfg.LeafRepos()
+	if len(leaves) != 1 {
+		return fmt.Errorf("expected one leaf, got %v", leaves)
+	}
+	processed, err := r.alreadyProcessed(ctx, name, tag, leaves[0], leafBranch)
 	if err != nil {
 		return fmt.Errorf("check existing trackers: %w", err)
 	}
 	if processed {
 		return nil
 	}
-	log.Printf("pass1Cron: synthesizing dispatch for %s %s (no tracker found)", name, tag)
+	log.Printf("pass1Cron: synthesizing dispatch for %s %s -> %s %s (no tracker found)", name, tag, leaves[0], leafBranch)
 	return r.pass1Dispatch(ctx, DispatchEvent{Repo: ghRepo, Tag: tag})
 }
 
-// alreadyProcessed reports whether a tracker for (dep, version) exists in
-// any state. Open trackers alone are insufficient — pass 2 closes finished
-// ones, and we don't want to re-open them.
-func (r *Reconciler) alreadyProcessed(ctx context.Context, dep, version string) (bool, error) {
-	issues, err := r.gh.ListIssuesAllStates(ctx, r.settings.AutomationRepo, tracker.Labels(dep))
+// alreadyProcessed reports whether a tracker for (dep, version, leaf) exists
+// in any state. Open trackers alone are insufficient — pass 2 closes
+// finished ones, and we don't want to re-open them.
+func (r *Reconciler) alreadyProcessed(ctx context.Context, dep, version, leafRepo, leafBranch string) (bool, error) {
+	issues, err := r.gh.ListIssuesAllStates(ctx, r.settings.AutomationRepo, tracker.Labels(dep, leafRepo, leafBranch))
 	if err != nil {
 		return false, err
 	}

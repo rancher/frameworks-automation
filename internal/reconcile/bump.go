@@ -5,48 +5,88 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/rancher/release-automation/internal/config"
 	"github.com/rancher/release-automation/internal/pr"
 	"github.com/rancher/release-automation/internal/tracker"
 )
 
-// processBumpOp is the shared pipeline that takes a (dep, version, targets)
-// triple and lands it: tracker find-or-create, supersede older versions,
-// open bump PRs, persist any state changes back to the tracker body.
+// runBump is the shared engine for landing a (dep, version) onto a single
+// leaf branch. Both pass1Dispatch (auto path, derives leafBranch from the
+// tag) and RunBumpDep (manual path, leafBranch from input) call this — the
+// only thing they vary is how leafBranch is obtained.
 //
-// Both pass1Dispatch (auto path) and RunBumpDep (manual path) call this
-// after deriving their target set — the only difference between them is how
-// the targets are computed.
+// Pipeline:
+//
+//  1. Resolve the leaf and load VERSION.md tables (leaf + every paired
+//     dependent of `dep`).
+//  2. Fan out targets via ComputeTargetsForLeafBranch.
+//  3. Find or create the (dep, version, leaf-branch) tracker.
+//  4. Supersede older trackers on this same leaf-branch (closes their PRs).
+//  5. Open one bump PR per target if not already linked.
+//  6. Re-render the tracker body.
 //
 // Caller owns the surrounding lifecycle (e.g. running passes 2-4 after).
-func (r *Reconciler) processBumpOp(ctx context.Context, dep, version string, rawTargets []Target) error {
-	if len(rawTargets) == 0 {
-		log.Printf("bump-op: %s %s has no targets", dep, version)
-		return nil
+func (r *Reconciler) runBump(ctx context.Context, dep, version, leafBranch string) error {
+	if leafBranch == "" {
+		return fmt.Errorf("runBump: leafBranch is required")
 	}
 	depRepo, ok := r.cfg.Repos[dep]
 	if !ok {
-		return fmt.Errorf("dep %q not in config", dep)
+		return fmt.Errorf("runBump: dep %q not in config", dep)
+	}
+
+	leaves := r.cfg.LeafRepos()
+	if len(leaves) != 1 {
+		return fmt.Errorf("runBump: expected exactly one leaf repo, found %d: %v", len(leaves), leaves)
+	}
+	leafRepo := leaves[0]
+
+	leafTable, err := r.fetchVersionTable(ctx, leafRepo)
+	if err != nil {
+		return fmt.Errorf("load leaf VERSION.md: %w", err)
+	}
+	dependentTables := make(map[string]*config.VersionTable)
+	for _, d := range r.cfg.Dependents(dep) {
+		if d == leafRepo || r.cfg.Repos[d].Kind != config.KindPaired {
+			continue
+		}
+		tbl, err := r.fetchVersionTable(ctx, d)
+		if err != nil {
+			return fmt.Errorf("load %s VERSION.md: %w", d, err)
+		}
+		dependentTables[d] = tbl
+	}
+
+	rawTargets, err := ComputeTargetsForLeafBranch(r.cfg, dep, leafRepo, leafBranch, leafTable, dependentTables)
+	if err != nil {
+		return fmt.Errorf("compute targets: %w", err)
+	}
+	if len(rawTargets) == 0 {
+		log.Printf("runBump: %s %s onto %s %s has no targets", dep, version, leafRepo, leafBranch)
+		return nil
 	}
 
 	op := tracker.Op{
-		Dep:     dep,
-		Version: version,
-		Targets: toTrackerTargets(rawTargets),
+		Dep:        dep,
+		Version:    version,
+		LeafRepo:   leafRepo,
+		LeafBranch: leafBranch,
+		Targets:    toTrackerTargets(rawTargets),
 	}
 
 	issue, err := tracker.FindOrCreate(ctx, r.gh, r.settings.AutomationRepo, &op)
 	if err != nil {
 		return err
 	}
-	log.Printf("bump-op: tracker for %s %s -> %s", dep, version, issue.URL)
+	log.Printf("runBump: tracker for %s %s on %s %s -> %s", dep, version, leafRepo, leafBranch, issue.URL)
 
-	if err := tracker.Supersede(ctx, r.gh, r.settings.AutomationRepo, dep, version, issue.URL); err != nil {
-		return fmt.Errorf("supersede older trackers for %s: %w", dep, err)
+	if err := tracker.Supersede(ctx, r.gh, r.settings.AutomationRepo, dep, leafRepo, leafBranch, version, issue.URL); err != nil {
+		return fmt.Errorf("supersede older trackers for %s on %s %s: %w", dep, leafRepo, leafBranch, err)
 	}
 
 	mutated := false
 	for i := range op.Targets {
-		changed, err := r.bumpTarget(ctx, dep, version, depRepo.Module, issue.URL, &op.Targets[i])
+		changed, err := r.bumpTarget(ctx, dep, version, leafBranch, depRepo.Module, issue.URL, &op.Targets[i])
 		if err != nil {
 			return err
 		}
@@ -65,10 +105,9 @@ func (r *Reconciler) processBumpOp(ctx context.Context, dep, version string, raw
 // bumpTarget opens (or adopts) a single bump PR for `target`. Mutates target
 // in place with PR number/URL/state. Returns true when target was changed.
 //
-// Skipped (returns false, nil) when target.PR is already set — used by both
-// pass1Dispatch (re-runs over partially-completed trackers) and RunBumpDep
-// (the manual-bump entrypoint may target a branch already linked).
-func (r *Reconciler) bumpTarget(ctx context.Context, dep, version, depModule, trackerURL string, target *tracker.Target) (bool, error) {
+// Skipped (returns false, nil) when target.PR is already set — re-runs over
+// partially-completed trackers idempotently no-op the already-linked rows.
+func (r *Reconciler) bumpTarget(ctx context.Context, dep, version, leafBranch, depModule, trackerURL string, target *tracker.Target) (bool, error) {
 	if target.PR != 0 {
 		log.Printf("bump: %s %s already linked PR #%d on %s %s", dep, version, target.PR, target.Repo, target.Branch)
 		return false, nil
@@ -84,7 +123,7 @@ func (r *Reconciler) bumpTarget(ctx context.Context, dep, version, depModule, tr
 	req := pr.Request{
 		Repo:       downstreamGH,
 		BaseBranch: target.Branch,
-		HeadBranch: bumpBranchName(dep, version),
+		HeadBranch: bumpBranchName(dep, version, leafBranch),
 		Module:     depModule,
 		Version:    version,
 		TrackerURL: trackerURL,

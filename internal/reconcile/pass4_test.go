@@ -9,7 +9,7 @@ import (
 	ghclient "github.com/rancher/release-automation/internal/github"
 )
 
-func TestItemsForLeafBranch(t *testing.T) {
+func TestRollUp(t *testing.T) {
 	bodyWith := func(state string) string {
 		return "x\n<!-- bump-op-state v1\n" +
 			"targets:\n" +
@@ -18,18 +18,19 @@ func TestItemsForLeafBranch(t *testing.T) {
 			"  - {repo: steve, branch: main, pr: 3, state: merged}\n" +
 			"-->\n"
 	}
-	open := []*ghclient.Issue{
-		{Number: 100, Title: "[bump] wrangler v0.5.1", URL: "https://x/100", Labels: []string{"bump-op", "dep:wrangler"}, Body: bodyWith("merged")},
-		{Number: 101, Title: "[bump] norman v0.7.5", URL: "https://x/101", Labels: []string{"bump-op", "dep:norman"}, Body: bodyWith("open")},
-		{Number: 102, Title: "[bump] lasso v1.0.0", URL: "https://x/102", Labels: []string{"bump-op", "dep:lasso"}, Body: "<!-- bump-op-state v1\ntargets:\n  - {repo: steve, branch: main, pr: 9, state: open}\n-->\n"},
+	// Caller has already filtered by leaf:rancher:main label, so rollUp
+	// receives only matching trackers.
+	trackers := []*ghclient.Issue{
+		{Number: 100, Title: "[bump] wrangler v0.5.1 → rancher main", URL: "https://x/100", Labels: []string{"bump-op", "dep:wrangler", "leaf:rancher:main"}, Body: bodyWith("merged")},
+		{Number: 101, Title: "[bump] norman v0.7.5 → rancher main", URL: "https://x/101", Labels: []string{"bump-op", "dep:norman", "leaf:rancher:main"}, Body: bodyWith("open")},
 	}
 
-	items, err := itemsForLeafBranch("rancher", "main", open)
+	items, err := rollUp(trackers)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
 	if len(items) != 2 {
-		t.Fatalf("want 2 items targeting rancher main, got %d: %+v", len(items), items)
+		t.Fatalf("want 2 items, got %d: %+v", len(items), items)
 	}
 	if items[0].Dep != "norman" || items[1].Dep != "wrangler" {
 		t.Errorf("sort order wrong: %+v", items)

@@ -20,19 +20,20 @@ type Issue struct {
 	Body   string // current rendered body, including embedded metadata
 }
 
-// FindOrCreate looks up the open tracker for (op.Dep, op.Version) in the
-// automation repo. If absent, creates one rendered from `op`. If present,
-// merges any state already stored in its metadata block back into `op` so
-// the caller sees existing PR links.
+// FindOrCreate looks up the open tracker for (op.Dep, op.Version,
+// op.LeafRepo, op.LeafBranch) in the automation repo. If absent, creates
+// one rendered from `op`. If present, merges any state already stored in
+// its metadata block back into `op` so the caller sees existing PR links.
 //
-// Lookup: query `bump-op + dep:<name>` and filter the (≤ a handful) results
-// by version parsed from the title. We deliberately don't use a per-version
-// label — that would proliferate forever as releases ship.
+// Lookup: query `bump-op + dep:<name> + leaf:<repo>:<branch>` and filter
+// by version parsed from the title. The label triple alone usually returns
+// one issue (older versions for the same leaf get superseded); the version
+// filter handles the brief overlap window.
 func FindOrCreate(ctx context.Context, gh *ghclient.Client, automationRepo string, op *Op) (*Issue, error) {
-	labels := Labels(op.Dep)
+	labels := Labels(op.Dep, op.LeafRepo, op.LeafBranch)
 	candidates, err := gh.ListOpenIssues(ctx, automationRepo, labels)
 	if err != nil {
-		return nil, fmt.Errorf("find tracker for %s %s: %w", op.Dep, op.Version, err)
+		return nil, fmt.Errorf("find tracker for %s %s on %s %s: %w", op.Dep, op.Version, op.LeafRepo, op.LeafBranch, err)
 	}
 	for _, existing := range candidates {
 		if ParseVersionFromTitle(existing.Title, op.Dep) != op.Version {
@@ -50,9 +51,9 @@ func FindOrCreate(ctx context.Context, gh *ghclient.Client, automationRepo strin
 	if err != nil {
 		return nil, err
 	}
-	created, err := gh.CreateIssue(ctx, automationRepo, Title(op.Dep, op.Version), body, labels)
+	created, err := gh.CreateIssue(ctx, automationRepo, Title(op.Dep, op.Version, op.LeafRepo, op.LeafBranch), body, labels)
 	if err != nil {
-		return nil, fmt.Errorf("create tracker for %s %s: %w", op.Dep, op.Version, err)
+		return nil, fmt.Errorf("create tracker for %s %s on %s %s: %w", op.Dep, op.Version, op.LeafRepo, op.LeafBranch, err)
 	}
 	return &Issue{Number: created.Number, Title: created.Title, URL: created.URL, Body: body}, nil
 }
@@ -67,16 +68,21 @@ func UpdateBody(ctx context.Context, gh *ghclient.Client, automationRepo string,
 	return gh.UpdateIssueBody(ctx, automationRepo, issueNum, body)
 }
 
-// Supersede closes any open tracker for `dep` whose version is older than
-// `newVersion`, including all open PRs linked from that tracker. Each closed
-// PR + tracker gets a comment pointing at `newURL` for traceability.
+// Supersede closes any open tracker for `dep` on this same leaf branch
+// whose version is older than `newVersion`, including all open PRs linked
+// from that tracker. Each closed PR + tracker gets a comment pointing at
+// `newURL` for traceability.
+//
+// Scoped to (dep, leafRepo, leafBranch): newer wrangler v0.5.2 → main
+// supersedes older wrangler v0.5.1 → main, but does NOT touch wrangler
+// v0.5.1 → release/v2.13 (independent in-flight op on a different line).
 //
 // "Older" is a strict semver comparison — equal versions don't supersede
 // (FindOrCreate handles the dedupe for the same version).
-func Supersede(ctx context.Context, gh *ghclient.Client, automationRepo string, dep, newVersion string, newTrackerURL string) error {
-	open, err := gh.ListOpenIssues(ctx, automationRepo, Labels(dep))
+func Supersede(ctx context.Context, gh *ghclient.Client, automationRepo string, dep, leafRepo, leafBranch, newVersion string, newTrackerURL string) error {
+	open, err := gh.ListOpenIssues(ctx, automationRepo, Labels(dep, leafRepo, leafBranch))
 	if err != nil {
-		return fmt.Errorf("scan trackers for dep:%s: %w", dep, err)
+		return fmt.Errorf("scan trackers for dep:%s leaf:%s:%s: %w", dep, leafRepo, leafBranch, err)
 	}
 	for _, issue := range open {
 		ver := ParseVersionFromTitle(issue.Title, dep)

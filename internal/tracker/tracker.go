@@ -3,7 +3,9 @@
 // per-target PR number, last-known PR state, and (later) the Slack thread ts
 // for in-thread replies.
 //
-// Lookup is by labels: `bump-op`, `dep:<name>`, `version:<tag>`.
+// Tracker identity is (dep, version, leaf-branch) — one tracker per bump
+// landing on a specific leaf branch. Lookup is by labels: `bump-op`,
+// `dep:<name>`, `leaf:<leaf-repo>:<leaf-branch>`.
 package tracker
 
 import (
@@ -16,24 +18,31 @@ import (
 )
 
 const (
-	LabelOp     = "bump-op"
-	LabelDepFmt = "dep:%s" // e.g. dep:steve
+	LabelOp      = "bump-op"
+	LabelDepFmt  = "dep:%s"          // e.g. dep:steve
+	LabelLeafFmt = "leaf:%s:%s"      // e.g. leaf:rancher:main, leaf:rancher:release/v2.13
 
 	stateOpen  = "<!-- bump-op-state v1"
 	stateClose = "-->"
 )
 
-// titlePrefixFmt matches Title(): "[bump] {dep} {version}". Stable —
-// ParseVersionFromTitle relies on it.
-const titlePrefixFmt = "[bump] %s "
+// titlePrefixFmt matches Title(): "[bump] {dep} {version} → {leafRepo} {leafBranch}".
+// Stable — ParseVersionFromTitle relies on the prefix and the " → " separator.
+const (
+	titlePrefixFmt = "[bump] %s "
+	titleArrow     = " → "
+)
 
-// Op is a single bump operation: one (dep, version) fanned out to N target
-// branches across N downstream repos. Targets are ordered for stable
-// rendering — keep them sorted by (Repo, Branch).
+// Op is a single bump operation: a (dep, version) landing on one leaf branch
+// (e.g. rancher main, rancher release/v2.13). Targets are the per-downstream
+// branches that ship against that leaf branch — ordered for stable rendering
+// (keep them sorted by Repo,Branch).
 type Op struct {
-	Dep     string
-	Version string
-	Targets []Target
+	Dep        string
+	Version    string
+	LeafRepo   string // e.g. "rancher" — the leaf this bump targets
+	LeafBranch string // e.g. "main", "release/v2.13"
+	Targets    []Target
 }
 
 // Target is one downstream branch. PR is 0 until a bump PR is opened.
@@ -58,27 +67,49 @@ type Persistent struct {
 
 // Title is the canonical issue title for an op. The version is parsed back
 // out of the title (see ParseVersionFromTitle) — keep this format stable.
-func Title(dep, version string) string {
-	return fmt.Sprintf(titlePrefixFmt+"%s", dep, version)
+//
+// Format: "[bump] {dep} {version} → {leafRepo} {leafBranch}". Encoding the
+// leaf in the title makes trackers immediately distinguishable in lists
+// (you can tell wrangler v0.5.1→main from wrangler v0.5.1→release/v2.13 at
+// a glance) and gives ParseVersionFromTitle a stable separator to split on.
+func Title(dep, version, leafRepo, leafBranch string) string {
+	return fmt.Sprintf(titlePrefixFmt+"%s"+titleArrow+"%s %s", dep, version, leafRepo, leafBranch)
 }
 
 // Labels returns the canonical label set for a tracker. The version is NOT a
 // label (it would proliferate one new label per release); it lives in the
-// title and is parsed by ParseVersionFromTitle.
-func Labels(dep string) []string {
-	return []string{LabelOp, fmt.Sprintf(LabelDepFmt, dep)}
+// title and is parsed by ParseVersionFromTitle. The leaf label IS used so
+// that one tracker per (dep, version, leaf-branch) is queryable directly —
+// proliferation here is bounded by leaf branches (a handful).
+func Labels(dep, leafRepo, leafBranch string) []string {
+	return []string{
+		LabelOp,
+		fmt.Sprintf(LabelDepFmt, dep),
+		fmt.Sprintf(LabelLeafFmt, leafRepo, leafBranch),
+	}
+}
+
+// LeafLabel is the single leaf-axis label, used by the dashboard to query
+// trackers landing on a specific (leafRepo, leafBranch) without filtering.
+func LeafLabel(leafRepo, leafBranch string) string {
+	return fmt.Sprintf(LabelLeafFmt, leafRepo, leafBranch)
 }
 
 // ParseVersionFromTitle returns the version embedded in `title` for `dep`,
 // or "" if `title` doesn't match the canonical format. Used during
 // FindOrCreate (filter candidates returned by the dep-label query) and
-// Supersede (compare versions across open trackers for the same dep).
+// Supersede (compare versions across open trackers for the same dep+leaf).
 func ParseVersionFromTitle(title, dep string) string {
 	prefix := fmt.Sprintf(titlePrefixFmt, dep)
 	if !strings.HasPrefix(title, prefix) {
 		return ""
 	}
-	return strings.TrimPrefix(title, prefix)
+	rest := strings.TrimPrefix(title, prefix)
+	i := strings.Index(rest, titleArrow)
+	if i < 0 {
+		return ""
+	}
+	return rest[:i]
 }
 
 // Render produces the issue body markdown for `op`, with the metadata block

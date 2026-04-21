@@ -3,7 +3,9 @@ package reconcile
 import (
 	"context"
 	"fmt"
+	"log"
 	"sort"
+	"strings"
 
 	"golang.org/x/mod/semver"
 
@@ -12,9 +14,10 @@ import (
 )
 
 // pass1Dispatch reacts to a single tag-emitted event. Resolves the dep,
-// loads the VERSION.md tables it needs, computes the target list using the
-// dep-minor mapping, and hands off to processBumpOp for the rest of the
-// pipeline (tracker, supersede, PR opening, body update).
+// derives the leaf branch this release lands on (paired: dep.minor → pair
+// → leaf branch via VERSION.md; independent: always `main` — older
+// release/* branches require a manual `Bump <dep>` workflow run), then
+// hands off to runBump for the rest of the pipeline.
 func (r *Reconciler) pass1Dispatch(ctx context.Context, ev DispatchEvent) error {
 	if !semver.IsValid(ev.Tag) {
 		return fmt.Errorf("invalid tag %q (not semver)", ev.Tag)
@@ -23,46 +26,59 @@ func (r *Reconciler) pass1Dispatch(ctx context.Context, ev DispatchEvent) error 
 	if err != nil {
 		return err
 	}
-
-	depTable, downstreamTables, err := r.loadVersionTables(ctx, dep)
-	if err != nil {
-		return fmt.Errorf("load VERSION.md tables: %w", err)
+	if r.cfg.Repos[dep].Kind == config.KindLeaf {
+		log.Printf("pass1: %s is a leaf — nothing to propagate", dep)
+		return nil
 	}
 
-	rawTargets, err := ComputeTargets(r.cfg, dep, ev.Tag, depTable, downstreamTables)
+	leafBranch, err := r.deriveLeafBranchForDispatch(ctx, dep, ev.Tag)
 	if err != nil {
-		return fmt.Errorf("compute targets: %w", err)
+		return fmt.Errorf("derive leaf branch: %w", err)
 	}
-	return r.processBumpOp(ctx, dep, ev.Tag, rawTargets)
+	if leafBranch == "" {
+		log.Printf("pass1: %s %s has no matching leaf branch", dep, ev.Tag)
+		return nil
+	}
+	return r.runBump(ctx, dep, ev.Tag, leafBranch)
 }
 
-// loadVersionTables fetches each repo's VERSION.md from its default branch
-// (empty ref). VERSION.md is canonical on the default branch — older release
-// branches can drift (a row added on main for a new release line may never
-// be backported), so we always read the most up-to-date copy.
+// deriveLeafBranchForDispatch picks the leaf branch this auto-bump targets:
 //
-// Independent deps don't need their own table; only paired do.
-func (r *Reconciler) loadVersionTables(ctx context.Context, dep string) (*config.VersionTable, map[string]*config.VersionTable, error) {
-	depRepo := r.cfg.Repos[dep]
-	dependents := r.cfg.Dependents(dep)
-
-	downstream := make(map[string]*config.VersionTable, len(dependents))
-	for _, d := range dependents {
-		tbl, err := r.fetchVersionTable(ctx, d)
-		if err != nil {
-			return nil, nil, err
-		}
-		downstream[d] = tbl
-	}
-
-	if depRepo.Kind != config.KindPaired {
-		return nil, downstream, nil
+//	independent → "main" only. Older release/* branches require a manual
+//	              `Bump <dep>` workflow run (the cron path doesn't infer
+//	              them since there's no version-pair to consult).
+//	paired      → dep.VERSION.md row whose Minor == version's minor gives
+//	              Pair (= leaf.minor); leaf.VERSION.md row whose Minor ==
+//	              that pair gives leaf.branch.
+//
+// Returns "" (no error) when the chain exists but the leaf hasn't cut the
+// matching branch yet.
+func (r *Reconciler) deriveLeafBranchForDispatch(ctx context.Context, dep, version string) (string, error) {
+	if r.cfg.Repos[dep].Kind == config.KindIndependent {
+		return "main", nil
 	}
 	depTable, err := r.fetchVersionTable(ctx, dep)
 	if err != nil {
-		return nil, nil, err
+		return "", fmt.Errorf("fetch %s VERSION.md: %w", dep, err)
 	}
-	return depTable, downstream, nil
+	minor := semver.MajorMinor(version)
+	if minor == "" {
+		return "", fmt.Errorf("invalid semver %q", version)
+	}
+	pair := depTable.LookupPair(minor)
+	if pair == "" {
+		return "", fmt.Errorf("dep %s minor %s not in VERSION.md", dep, minor)
+	}
+
+	leaves := r.cfg.LeafRepos()
+	if len(leaves) != 1 {
+		return "", fmt.Errorf("expected exactly one leaf repo, found %d: %v", len(leaves), leaves)
+	}
+	leafTable, err := r.fetchVersionTable(ctx, leaves[0])
+	if err != nil {
+		return "", fmt.Errorf("fetch %s VERSION.md: %w", leaves[0], err)
+	}
+	return leafTable.BranchForMinor(pair), nil
 }
 
 func (r *Reconciler) fetchVersionTable(ctx context.Context, repoKey string) (*config.VersionTable, error) {
@@ -98,6 +114,12 @@ func toTrackerTargets(targets []Target) []tracker.Target {
 
 // bumpBranchName is the canonical head-branch name for a bump PR. Stable so
 // re-runs idempotently dedupe via ListOpenPRsByHead.
-func bumpBranchName(dep, version string) string {
-	return fmt.Sprintf("automation/bump-%s-%s", dep, version)
+//
+// Includes the leaf branch so two PRs for the same (dep, version) can
+// coexist on different leaf lines (e.g. wrangler v0.5.1 onto rancher main
+// AND rancher release/v2.13). Leaf branch is sanitized — slashes become
+// dashes so the head-branch path doesn't acquire weird nesting.
+func bumpBranchName(dep, version, leafBranch string) string {
+	leaf := strings.ReplaceAll(leafBranch, "/", "-")
+	return fmt.Sprintf("automation/bump-%s-%s-leaf-%s", dep, version, leaf)
 }

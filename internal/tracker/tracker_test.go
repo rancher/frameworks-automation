@@ -180,12 +180,13 @@ func TestParseVersionFromTitle(t *testing.T) {
 	cases := []struct {
 		title, dep, want string
 	}{
-		{"[bump] wrangler v0.5.1", "wrangler", "v0.5.1"},
-		{"[bump] steve v0.7.5-rc1", "steve", "v0.7.5-rc1"},
-		{"[bump] wrangler v0.5.1", "steve", ""},                     // wrong dep
-		{"random title", "wrangler", ""},                            // wrong shape
-		{"[bump] wranglerv0.5.1", "wrangler", ""},                   // missing space
-		{Title("apiserver", "v0.10.0"), "apiserver", "v0.10.0"},     // round-trip
+		{"[bump] wrangler v0.5.1 → rancher main", "wrangler", "v0.5.1"},
+		{"[bump] steve v0.7.5-rc1 → rancher release/v2.13", "steve", "v0.7.5-rc1"},
+		{"[bump] wrangler v0.5.1 → rancher main", "steve", ""},               // wrong dep
+		{"[bump] wrangler v0.5.1", "wrangler", ""},                           // old format, no arrow
+		{"random title", "wrangler", ""},                                     // wrong shape
+		{"[bump] wranglerv0.5.1 → rancher main", "wrangler", ""},             // missing space
+		{Title("apiserver", "v0.10.0", "rancher", "release/v2.13"), "apiserver", "v0.10.0"}, // round-trip
 	}
 	for _, c := range cases {
 		if got := ParseVersionFromTitle(c.title, c.dep); got != c.want {
@@ -194,12 +195,28 @@ func TestParseVersionFromTitle(t *testing.T) {
 	}
 }
 
-func TestLabelsHasNoVersion(t *testing.T) {
-	got := Labels("wrangler")
+func TestLabelsContainsLeafButNotVersion(t *testing.T) {
+	got := Labels("wrangler", "rancher", "release/v2.13")
+	hasLeaf := false
 	for _, l := range got {
 		if strings.HasPrefix(l, "version:") {
 			t.Errorf("Labels should not include a version: label, got %v", got)
 		}
+		if l == "leaf:rancher:release/v2.13" {
+			hasLeaf = true
+		}
+	}
+	if !hasLeaf {
+		t.Errorf("Labels should include leaf:rancher:release/v2.13, got %v", got)
+	}
+}
+
+func TestTitleAndLeafLabel(t *testing.T) {
+	if got, want := Title("wrangler", "v0.5.1", "rancher", "main"), "[bump] wrangler v0.5.1 → rancher main"; got != want {
+		t.Errorf("Title: got %q want %q", got, want)
+	}
+	if got, want := LeafLabel("rancher", "release/v2.13"), "leaf:rancher:release/v2.13"; got != want {
+		t.Errorf("LeafLabel: got %q want %q", got, want)
 	}
 }
 
