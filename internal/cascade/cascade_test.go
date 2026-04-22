@@ -109,6 +109,27 @@ func TestRender_BodyContainsStagesAndState(t *testing.T) {
 	}
 }
 
+func TestRenderTagRef(t *testing.T) {
+	cases := []struct {
+		name string
+		t    TagPrompt
+		want string
+	}{
+		{"pending no hints", TagPrompt{}, "_pending_"},
+		{"pending with expected only", TagPrompt{Expected: "v0.7.6"}, "expected v0.7.6"},
+		{"pending with url only", TagPrompt{WorkflowURL: "https://x/actions"}, "_pending_ ([run Release workflow](https://x/actions))"},
+		{"pending with expected + url", TagPrompt{Expected: "v0.7.6", WorkflowURL: "https://x/actions"},
+			"expected v0.7.6 ([run Release workflow](https://x/actions))"},
+		{"tagged collapses to version", TagPrompt{Tagged: true, Version: "v0.7.6", Expected: "v0.7.6", WorkflowURL: "https://x"}, "v0.7.6"},
+		{"tagged but no version", TagPrompt{Tagged: true}, "_tagged_"},
+	}
+	for _, c := range cases {
+		if got := renderTagRef(c.t); got != c.want {
+			t.Errorf("%s: got %q want %q", c.name, got, c.want)
+		}
+	}
+}
+
 func TestRenderBumpRef(t *testing.T) {
 	cases := []struct {
 		name string

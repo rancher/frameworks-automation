@@ -72,6 +72,10 @@ func (r *Reconciler) RunCascade(ctx context.Context, dep, version, leafBranch st
 	if len(stages) == 0 {
 		return fmt.Errorf("compute cascade stages: empty plan")
 	}
+	if err := r.fillTagPromptHints(ctx, stages, leafTable, dependentTables); err != nil {
+		// Hints are advisory — log and continue with a barer prompt.
+		log.Printf("cascade: fill tag prompt hints: %v", err)
+	}
 
 	op := cascade.Op{
 		Dep:        dep,
@@ -149,6 +153,104 @@ func (r *Reconciler) openCascadeStageBumps(ctx context.Context, op *cascade.Op, 
 		}
 	}
 	return mutated, nil
+}
+
+// fillTagPromptHints populates each TagPrompt's Expected (next-patch
+// suggestion) and WorkflowURL by querying the prompt repo's releases. The
+// minor used for filtering comes from each repo's own VERSION.md row for
+// the prompt's branch — that's the version line the per-repo Release
+// workflow validates against, so any future tag matching this minor is the
+// correct cascade-mid tag.
+//
+// Hints are advisory: stale or missing hints don't break the cascade flow
+// (the per-repo Release workflow validates the input version anyway).
+func (r *Reconciler) fillTagPromptHints(
+	ctx context.Context,
+	stages []cascade.Stage,
+	leafTable *config.VersionTable,
+	dependentTables map[string]*config.VersionTable,
+) error {
+	for i := range stages {
+		for j := range stages[i].Tags {
+			tg := &stages[i].Tags[j]
+			repo, ok := r.cfg.Repos[tg.Repo]
+			if !ok {
+				continue
+			}
+			ghRepo, err := repo.GitHubRepo()
+			if err != nil {
+				return fmt.Errorf("repo %s: %w", tg.Repo, err)
+			}
+			tg.WorkflowURL = fmt.Sprintf("https://github.com/%s/actions/workflows/release.yml", ghRepo)
+
+			minor := minorForRepoBranch(tg.Repo, tg.Branch, leafTable, dependentTables)
+			if minor == "" {
+				continue
+			}
+			next, err := r.predictNextPatch(ctx, ghRepo, minor)
+			if err != nil {
+				log.Printf("cascade: predict next patch %s %s: %v", tg.Repo, tg.Branch, err)
+				continue
+			}
+			tg.Expected = next
+		}
+	}
+	return nil
+}
+
+// minorForRepoBranch returns the VERSION.md minor for `repo`'s `branch`.
+// The leaf repo uses leafTable; everything else uses dependentTables.
+// Returns "" if the table is unavailable or the branch isn't listed.
+func minorForRepoBranch(repo, branch string, leafTable *config.VersionTable, dependentTables map[string]*config.VersionTable) string {
+	if tbl := dependentTables[repo]; tbl != nil {
+		return tbl.LookupMinor(branch)
+	}
+	if leafTable != nil {
+		return leafTable.LookupMinor(branch)
+	}
+	return ""
+}
+
+// predictNextPatch fetches every release in `ghRepo`, picks the highest
+// patch matching `minor` (e.g. "v0.7"), and returns minor + "." + (patch+1).
+// Returns minor + ".0" when no prior release matches — cascade is the first
+// patch on this minor.
+func (r *Reconciler) predictNextPatch(ctx context.Context, ghRepo, minor string) (string, error) {
+	tags, err := r.gh.ListReleaseTags(ctx, ghRepo)
+	if err != nil {
+		return "", err
+	}
+	highest := -1
+	prefix := minor + "."
+	for _, t := range tags {
+		if !semver.IsValid(t) {
+			continue
+		}
+		if semver.MajorMinor(t) != minor {
+			continue
+		}
+		// Strip the "minor." prefix; what remains is "<patch>" or
+		// "<patch>-prerelease". Pre-releases bump the implied patch.
+		rest := strings.TrimPrefix(t, prefix)
+		if rest == "" {
+			continue
+		}
+		patchStr := rest
+		if i := strings.IndexAny(rest, "-+"); i >= 0 {
+			patchStr = rest[:i]
+		}
+		var patch int
+		if _, err := fmt.Sscanf(patchStr, "%d", &patch); err != nil {
+			continue
+		}
+		if patch > highest {
+			highest = patch
+		}
+	}
+	if highest < 0 {
+		return minor + ".0", nil
+	}
+	return fmt.Sprintf("%s.%d", minor, highest+1), nil
 }
 
 // cascadeBumpBranchName is the canonical head-branch name for a cascade bump

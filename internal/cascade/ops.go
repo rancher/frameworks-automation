@@ -104,6 +104,12 @@ func mergeState(op *Op, st Persistent) {
 			if j, ok := tidx[cur.Repo+"|"+cur.Branch]; ok {
 				op.Stages[i].Tags[k].Version = stored.Tags[j].Version
 				op.Stages[i].Tags[k].Tagged = stored.Tags[j].Tagged
+				if stored.Tags[j].Expected != "" {
+					op.Stages[i].Tags[k].Expected = stored.Tags[j].Expected
+				}
+				if stored.Tags[j].WorkflowURL != "" {
+					op.Stages[i].Tags[k].WorkflowURL = stored.Tags[j].WorkflowURL
+				}
 			}
 		}
 	}

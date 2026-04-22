@@ -69,6 +69,31 @@ func (c *Client) GetLatestReleaseTag(ctx context.Context, repo string) (string, 
 	return rel.GetTagName(), nil
 }
 
+// ListReleaseTags returns the tag names of every published release in `repo`,
+// in the order GitHub returns them (newest first). Used by next-patch
+// prediction in the cascade tag prompts. Returns an empty slice when the
+// repo has no releases yet.
+func (c *Client) ListReleaseTags(ctx context.Context, repo string) ([]string, error) {
+	owner, name, err := splitRepo(repo)
+	if err != nil {
+		return nil, err
+	}
+	rels, _, err := c.gh.Repositories.ListReleases(ctx, owner, name, &gh.ListOptions{PerPage: 100})
+	if err != nil {
+		return nil, fmt.Errorf("list releases %s: %w", repo, err)
+	}
+	out := make([]string, 0, len(rels))
+	for _, r := range rels {
+		if r.GetDraft() {
+			continue
+		}
+		if t := r.GetTagName(); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out, nil
+}
+
 type Issue struct {
 	Number int
 	Title  string

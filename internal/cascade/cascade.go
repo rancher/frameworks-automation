@@ -57,13 +57,24 @@ type Bump struct {
 }
 
 // TagPrompt is one tag the cascade waits on at the end of a non-final stage.
-// Version is observed (not predicted) — the dev picks the next-patch when
-// running the per-repo Release workflow.
+// Version is observed (not predicted) — set when the dev runs the per-repo
+// Release workflow and the resulting tag-emitted dispatch claims this slot.
+//
+// Expected is the next-patch suggestion shown alongside the prompt: computed
+// at cascade creation by listing the repo's releases and incrementing the
+// highest patch matching this branch's minor. Stale if someone tags a
+// higher patch outside the cascade flow — the dev sees a hint, not a hard
+// constraint (the per-repo Release workflow validates the version anyway).
+//
+// WorkflowURL points reviewers at the repo's Actions tab so they can run the
+// Release workflow without hunting for it.
 type TagPrompt struct {
-	Repo    string `yaml:"repo"`
-	Branch  string `yaml:"branch"`
-	Version string `yaml:"version,omitempty"`
-	Tagged  bool   `yaml:"tagged,omitempty"`
+	Repo        string `yaml:"repo"`
+	Branch      string `yaml:"branch"`
+	Version     string `yaml:"version,omitempty"`
+	Tagged      bool   `yaml:"tagged,omitempty"`
+	Expected    string `yaml:"expected,omitempty"`
+	WorkflowURL string `yaml:"workflow_url,omitempty"`
 }
 
 // Stage is one layer of the cascade. Bumps land first; once all merge, Tags
@@ -161,8 +172,7 @@ func Render(op Op, now time.Time) (string, error) {
 			if tg.Tagged {
 				check = "x"
 			}
-			ver := displayVersion(tg.Version)
-			fmt.Fprintf(&b, "- [%s] tag `%s` `%s` — %s\n", check, tg.Repo, tg.Branch, ver)
+			fmt.Fprintf(&b, "- [%s] tag `%s` `%s` — %s\n", check, tg.Repo, tg.Branch, renderTagRef(tg))
 		}
 		b.WriteString("\n")
 	}
@@ -192,6 +202,32 @@ func displayState(s string) string {
 		return "open"
 	}
 	return s
+}
+
+// renderTagRef formats a TagPrompt's trailing markdown:
+//
+//	tagged:    "v0.7.6"
+//	pending:   "expected v0.7.6 ([run Release workflow](url))"
+//	pending no expected: "_pending_ ([run Release workflow](url))"
+//	pending no expected/url: "_pending_"
+//
+// Once Tagged the prompt collapses to just the observed version — links
+// and predictions are noise after the fact.
+func renderTagRef(t TagPrompt) string {
+	if t.Tagged {
+		if t.Version != "" {
+			return t.Version
+		}
+		return "_tagged_"
+	}
+	prefix := "_pending_"
+	if t.Expected != "" {
+		prefix = "expected " + t.Expected
+	}
+	if t.WorkflowURL == "" {
+		return prefix
+	}
+	return fmt.Sprintf("%s ([run Release workflow](%s))", prefix, t.WorkflowURL)
 }
 
 // renderBumpRef mirrors tracker.renderRef for cascade bumps.
