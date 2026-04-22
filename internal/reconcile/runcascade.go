@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 
+	"golang.org/x/mod/modfile"
 	"golang.org/x/mod/semver"
 
 	"github.com/rancher/release-automation/internal/cascade"
@@ -39,8 +41,12 @@ func (r *Reconciler) RunCascade(ctx context.Context, dep, version, leafBranch st
 	if leafBranch == "" {
 		return fmt.Errorf("leaf branch is required")
 	}
-	if _, ok := r.cfg.Repos[dep]; !ok {
+	depRepo, ok := r.cfg.Repos[dep]
+	if !ok {
 		return fmt.Errorf("unknown dep %q", dep)
+	}
+	if err := r.assertReleaseExists(ctx, depRepo, dep, version); err != nil {
+		return err
 	}
 
 	leaves := r.cfg.LeafRepos()
@@ -147,6 +153,15 @@ func (r *Reconciler) openCascadeStageBumps(ctx context.Context, op *cascade.Op, 
 		case res.NoOp:
 			bp.State = "merged"
 			mutated = true
+			// Branch is already at the target. If the latest published tag
+			// on this minor also has every dep at target, no NEW tag is
+			// needed — claim the existing tag for this stage's prompt and
+			// let the cascade auto-advance.
+			if claimed, err := r.maybeClaimExistingTag(ctx, op, stage, bp); err != nil {
+				log.Printf("cascade: existing-tag check %s %s: %v", bp.Repo, bp.Branch, err)
+			} else if claimed != "" {
+				log.Printf("cascade: %s %s already at target via existing tag %s", bp.Repo, bp.Branch, claimed)
+			}
 		case res.PR != nil:
 			bp.PR = res.PR.Number
 			bp.PRURL = res.PR.URL
@@ -155,6 +170,101 @@ func (r *Reconciler) openCascadeStageBumps(ctx context.Context, op *cascade.Op, 
 		}
 	}
 	return mutated, nil
+}
+
+// maybeClaimExistingTag handles the "branch was already at target before we
+// touched it" case. When the latest published tag on bp's branch lineage has
+// every dep in bp pinned at its target version, that existing tag satisfies
+// the cascade-mid prompt — no new release is required. Sets the matching
+// TagPrompt's Version+Tagged and returns the claimed tag; returns "" when
+// no satisfying tag was found.
+func (r *Reconciler) maybeClaimExistingTag(ctx context.Context, op *cascade.Op, stage int, bp *cascade.Bump) (string, error) {
+	tag, err := r.findExistingTagForBump(ctx, bp)
+	if err != nil {
+		return "", err
+	}
+	if tag == "" {
+		return "", nil
+	}
+	for j := range op.Stages[stage].Tags {
+		tg := &op.Stages[stage].Tags[j]
+		if tg.Repo == bp.Repo && tg.Branch == bp.Branch && !tg.Tagged {
+			tg.Version = tag
+			tg.Tagged = true
+			return tag, nil
+		}
+	}
+	// Final stage has no Tags — that's fine, no claim to make.
+	return "", nil
+}
+
+// findExistingTagForBump returns the highest published release tag on bp's
+// branch lineage (matched by minor) where go.mod already pins every dep in
+// bp at its target version. Returns "" when no satisfying tag is found.
+func (r *Reconciler) findExistingTagForBump(ctx context.Context, bp *cascade.Bump) (string, error) {
+	repo, ok := r.cfg.Repos[bp.Repo]
+	if !ok {
+		return "", fmt.Errorf("repo %q not in config", bp.Repo)
+	}
+	ghRepo, err := repo.GitHubRepo()
+	if err != nil {
+		return "", err
+	}
+	tbl, err := r.fetchVersionTable(ctx, bp.Repo)
+	if err != nil {
+		return "", fmt.Errorf("fetch %s VERSION.md: %w", bp.Repo, err)
+	}
+	minor := tbl.LookupMinor(bp.Branch)
+	if minor == "" {
+		return "", nil
+	}
+	tags, err := r.gh.ListReleaseTags(ctx, ghRepo)
+	if err != nil {
+		return "", err
+	}
+	candidates := tags[:0:0]
+	for _, t := range tags {
+		if semver.IsValid(t) && semver.MajorMinor(t) == minor {
+			candidates = append(candidates, t)
+		}
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		return semver.Compare(candidates[i], candidates[j]) > 0
+	})
+	for _, tag := range candidates {
+		ok, err := r.tagSatisfiesBump(ctx, ghRepo, tag, bp.Deps)
+		if err != nil {
+			log.Printf("cascade: check %s@%s: %v", ghRepo, tag, err)
+			continue
+		}
+		if ok {
+			return tag, nil
+		}
+	}
+	return "", nil
+}
+
+// tagSatisfiesBump returns true when go.mod at `tag` requires every dep in
+// `deps` at its target version (exact match).
+func (r *Reconciler) tagSatisfiesBump(ctx context.Context, ghRepo, tag string, deps []cascade.DepBump) (bool, error) {
+	gomod, err := r.gh.FetchFile(ctx, ghRepo, tag, "go.mod")
+	if err != nil {
+		return false, err
+	}
+	mf, err := modfile.Parse("go.mod", []byte(gomod), nil)
+	if err != nil {
+		return false, fmt.Errorf("parse go.mod at %s@%s: %w", ghRepo, tag, err)
+	}
+	have := make(map[string]string, len(mf.Require))
+	for _, req := range mf.Require {
+		have[req.Mod.Path] = req.Mod.Version
+	}
+	for _, d := range deps {
+		if have[d.Module] != d.Version {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // bumpReady reports whether every Dep in `bp` has a non-empty Version. We
@@ -178,6 +288,30 @@ func bumpModules(bp *cascade.Bump) []pr.Module {
 		out[i] = pr.Module{Path: d.Module, Version: d.Version}
 	}
 	return out
+}
+
+// assertReleaseExists confirms `version` is a published release tag on
+// `dep`'s repo. Pre-flight check so a typo (wrong version, wrong dep) fails
+// before we create a tracker issue and try to clone downstreams.
+//
+// Released-tag check (not just any git tag): cascade is for finished
+// releases — the per-repo Release workflow is what produces these tags, so
+// "is there a Release with this tag" is the right question.
+func (r *Reconciler) assertReleaseExists(ctx context.Context, depRepo config.Repo, dep, version string) error {
+	ghRepo, err := depRepo.GitHubRepo()
+	if err != nil {
+		return fmt.Errorf("dep %s: %w", dep, err)
+	}
+	tags, err := r.gh.ListReleaseTags(ctx, ghRepo)
+	if err != nil {
+		return fmt.Errorf("list %s releases: %w", dep, err)
+	}
+	for _, t := range tags {
+		if t == version {
+			return nil
+		}
+	}
+	return fmt.Errorf("dep %s has no published release %s on %s", dep, version, ghRepo)
 }
 
 // fillTagPromptHints populates each TagPrompt's Expected (next-patch
