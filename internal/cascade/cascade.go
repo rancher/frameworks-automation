@@ -231,8 +231,16 @@ func renderTagRef(t TagPrompt) string {
 }
 
 // renderBumpRef mirrors tracker.renderRef for cascade bumps.
+//
+// PR==0 with State=="merged" means the bump was a no-op (go.mod already at the
+// target version when the bumper ran — someone bumped it manually, or a prior
+// cascade run merged it). Surface that explicitly so the rendered line matches
+// the ticked checkbox.
 func renderBumpRef(b Bump) string {
 	if b.PR == 0 {
+		if b.State == "merged" {
+			return "already up to date"
+		}
 		return "_pending_"
 	}
 	state := displayState(b.State)

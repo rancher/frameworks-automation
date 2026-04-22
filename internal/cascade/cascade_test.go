@@ -137,6 +137,7 @@ func TestRenderBumpRef(t *testing.T) {
 		want string
 	}{
 		{"no PR yet", Bump{}, "_pending_"},
+		{"no-op already at target", Bump{State: "merged"}, "already up to date"},
 		{"open with URL", Bump{PR: 42, PRURL: "https://x/pull/42", State: "open"}, "[#42](https://x/pull/42) (open)"},
 		{"empty state defaults to open", Bump{PR: 42, PRURL: "https://x/pull/42"}, "[#42](https://x/pull/42) (open)"},
 		{"ci-failing links to checks", Bump{PR: 88, PRURL: "https://x/pull/88", State: "ci-failing"}, "[#88](https://x/pull/88) ([ci-failing](https://x/pull/88/checks))"},
