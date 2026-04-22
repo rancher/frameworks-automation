@@ -7,10 +7,14 @@ import (
 )
 
 func TestRoundTripState(t *testing.T) {
-	body := "## Cascade\nwrangler v0.5.1 → rancher main\n"
+	body := "## Cascade\nrancher main\n"
 	in := Persistent{
 		SlackThreadTS: "1729451234.001900",
-		CurrentStage:  1,
+		Sources: []Source{
+			{Name: "wrangler", Version: "v0.5.1", Explicit: true},
+			{Name: "steve", Version: "v0.7.5"},
+		},
+		CurrentStage: 1,
 		Stages: []Stage{
 			{Layer: 1, Bumps: []Bump{{Repo: "steve", Branch: "main", PR: 42, State: "merged",
 				Deps: []DepBump{{Dep: "wrangler", Module: "github.com/x/wrangler", Version: "v0.5.1"}}}},
@@ -32,6 +36,9 @@ func TestRoundTripState(t *testing.T) {
 	}
 	if got.CurrentStage != 1 {
 		t.Errorf("current_stage: got %d want 1", got.CurrentStage)
+	}
+	if len(got.Sources) != 2 || got.Sources[0].Name != "wrangler" || !got.Sources[0].Explicit {
+		t.Errorf("sources: got %+v", got.Sources)
 	}
 	if len(got.Stages) != 2 || got.Stages[0].Bumps[0].PR != 42 || got.Stages[1].Bumps[0].Deps[0].Dep != "steve" {
 		t.Errorf("stages: got %+v", got.Stages)
@@ -66,11 +73,12 @@ func TestExtractMissingBlock(t *testing.T) {
 
 func TestRender_BodyContainsStagesAndState(t *testing.T) {
 	op := Op{
-		Dep:        "wrangler",
-		Version:    "v0.5.1",
-		LeafRepo:   "rancher",
-		LeafBranch: "main",
+		LeafRepo:     "rancher",
+		LeafBranch:   "main",
 		CurrentStage: 0,
+		Sources: []Source{
+			{Name: "wrangler", Version: "v0.5.1", Explicit: true},
+		},
 		Stages: []Stage{
 			{Layer: 1,
 				Bumps: []Bump{{Repo: "steve", Branch: "main", PR: 42, PRURL: "https://github.com/x/y/pull/42", State: "open",
@@ -87,8 +95,11 @@ func TestRender_BodyContainsStagesAndState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
-	if !strings.Contains(body, "wrangler v0.5.1 → rancher main") {
-		t.Errorf("body missing header line: %s", body)
+	if !strings.Contains(body, "rancher main") {
+		t.Errorf("body missing leaf line: %s", body)
+	}
+	if !strings.Contains(body, "wrangler v0.5.1 (explicit)") {
+		t.Errorf("body missing explicit source line: %s", body)
 	}
 	if !strings.Contains(body, "Stage 1: bump → tag (current)") {
 		t.Errorf("body missing stage 1 marker: %s", body)
@@ -111,6 +122,32 @@ func TestRender_BodyContainsStagesAndState(t *testing.T) {
 	}
 	if len(st.Stages) != 2 {
 		t.Errorf("expected 2 stages in state, got %d", len(st.Stages))
+	}
+	if len(st.Sources) != 1 || st.Sources[0].Name != "wrangler" || !st.Sources[0].Explicit {
+		t.Errorf("expected sources persisted, got %+v", st.Sources)
+	}
+}
+
+func TestRender_PairedLatestSource(t *testing.T) {
+	op := Op{
+		LeafRepo:   "rancher",
+		LeafBranch: "main",
+		Sources: []Source{
+			{Name: "steve", Version: "v0.7.5"}, // implicit paired-latest
+		},
+		Stages: []Stage{
+			{Layer: 1,
+				Bumps: []Bump{{Repo: "rancher", Branch: "main",
+					Deps: []DepBump{{Dep: "steve", Module: "github.com/x/steve", Version: "v0.7.5"}}}},
+			},
+		},
+	}
+	body, err := Render(op, time.Date(2026, 4, 21, 10, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if !strings.Contains(body, "steve v0.7.5 (paired-latest)") {
+		t.Errorf("body missing paired-latest source line: %s", body)
 	}
 }
 
@@ -156,30 +193,12 @@ func TestRenderBumpRef(t *testing.T) {
 	}
 }
 
-func TestParseVersionFromTitle(t *testing.T) {
-	cases := []struct {
-		title, dep, want string
-	}{
-		{"[cascade] wrangler v0.5.1 → rancher main", "wrangler", "v0.5.1"},
-		{"[cascade] steve v0.7.5-rc1 → rancher release/v2.13", "steve", "v0.7.5-rc1"},
-		{"[cascade] wrangler v0.5.1 → rancher main", "steve", ""},
-		{"[bump] wrangler v0.5.1 → rancher main", "wrangler", ""}, // bump tracker, not cascade
-		{"random title", "wrangler", ""},
-		{Title("apiserver", "v0.10.0", "rancher", "release/v2.13"), "apiserver", "v0.10.0"},
-	}
-	for _, c := range cases {
-		if got := ParseVersionFromTitle(c.title, c.dep); got != c.want {
-			t.Errorf("ParseVersionFromTitle(%q, %q) = %q, want %q", c.title, c.dep, got, c.want)
-		}
-	}
-}
-
-func TestLabelsAndTitleAndLeafLabel(t *testing.T) {
-	if got, want := Title("wrangler", "v0.5.1", "rancher", "main"), "[cascade] wrangler v0.5.1 → rancher main"; got != want {
+func TestTitleAndLabelsAndLeafLabel(t *testing.T) {
+	if got, want := Title("rancher", "main"), "[cascade] rancher main"; got != want {
 		t.Errorf("Title: got %q want %q", got, want)
 	}
-	got := Labels("wrangler", "rancher", "release/v2.13")
-	want := []string{"cascade-op", "dep:wrangler", "leaf:rancher:release/v2.13"}
+	got := Labels("rancher", "release/v2.13")
+	want := []string{"cascade-op", "leaf:rancher:release/v2.13"}
 	if len(got) != len(want) {
 		t.Fatalf("Labels len: got %v want %v", got, want)
 	}
@@ -190,5 +209,44 @@ func TestLabelsAndTitleAndLeafLabel(t *testing.T) {
 	}
 	if got, want := LeafLabel("rancher", "release/v2.13"), "leaf:rancher:release/v2.13"; got != want {
 		t.Errorf("LeafLabel: got %q want %q", got, want)
+	}
+}
+
+func TestSameExplicitSources(t *testing.T) {
+	cases := []struct {
+		name string
+		a, b []Source
+		want bool
+	}{
+		{"both empty", nil, nil, true},
+		{"both empty paired-only on both",
+			[]Source{{Name: "steve", Version: "v0.7.5"}},
+			[]Source{{Name: "steve", Version: "v0.7.6"}}, // paired-latest can drift
+			true},
+		{"matching explicit",
+			[]Source{{Name: "wrangler", Version: "v0.5.1", Explicit: true}},
+			[]Source{{Name: "wrangler", Version: "v0.5.1", Explicit: true}},
+			true},
+		{"different explicit version",
+			[]Source{{Name: "wrangler", Version: "v0.5.1", Explicit: true}},
+			[]Source{{Name: "wrangler", Version: "v0.5.2", Explicit: true}},
+			false},
+		{"different explicit set",
+			[]Source{{Name: "wrangler", Version: "v0.5.1", Explicit: true}},
+			[]Source{{Name: "lasso", Version: "v1.0.0", Explicit: true}},
+			false},
+		{"one has explicit, other doesn't",
+			[]Source{{Name: "wrangler", Version: "v0.5.1", Explicit: true}},
+			[]Source{{Name: "wrangler", Version: "v0.5.1"}}, // implicit
+			false},
+		{"order doesn't matter",
+			[]Source{{Name: "wrangler", Version: "v0.5.1", Explicit: true}, {Name: "lasso", Version: "v1.0.0", Explicit: true}},
+			[]Source{{Name: "lasso", Version: "v1.0.0", Explicit: true}, {Name: "wrangler", Version: "v0.5.1", Explicit: true}},
+			true},
+	}
+	for _, c := range cases {
+		if got := SameExplicitSources(c.a, c.b); got != c.want {
+			t.Errorf("%s: got %v want %v", c.name, got, c.want)
+		}
 	}
 }

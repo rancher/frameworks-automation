@@ -17,39 +17,66 @@ type Issue struct {
 	Body   string
 }
 
-// FindOrCreate looks up the open cascade for (op.Dep, op.Version, op.LeafRepo,
-// op.LeafBranch). If absent, creates one rendered from `op`. If present,
-// merges any state already stored in its metadata block back into `op` so
-// the caller sees existing PR links.
+// SupersedeFunc is invoked by FindOrCreate for every existing open cascade on
+// the same (leafRepo, leafBranch) whose stored explicit-source set differs
+// from the new op. Caller decides what supersede means — typically: close
+// the cascade's open PRs and close the issue with a comment.
+type SupersedeFunc func(ctx context.Context, old *Issue) error
+
+// FindOrCreate looks up the open cascade for (op.LeafRepo, op.LeafBranch).
+// One cascade per leaf branch is the invariant; the explicit-source set
+// determines whether re-running matches an existing cascade or replaces it.
 //
-// Lookup: query labels (cascade-op + dep + leaf) and filter by version
-// parsed from the title. Equal-version trackers dedupe; older versions
-// for the same (dep, leaf) get superseded by Supersede separately.
-func FindOrCreate(ctx context.Context, gh *ghclient.Client, automationRepo string, op *Op) (*Issue, error) {
-	labels := Labels(op.Dep, op.LeafRepo, op.LeafBranch)
+//   - Match (same explicit sources) → merge stored state into op, return that
+//     cascade. Paired-latest stays pinned to whatever was stored at creation
+//     time (mergeState's per-DepBump Version overlay handles this for free).
+//   - No match → invoke `supersede` for every divergent existing cascade,
+//     then create a fresh issue rendered from op.
+func FindOrCreate(
+	ctx context.Context,
+	gh *ghclient.Client,
+	automationRepo string,
+	op *Op,
+	supersede SupersedeFunc,
+) (*Issue, error) {
+	labels := Labels(op.LeafRepo, op.LeafBranch)
 	candidates, err := gh.ListOpenIssues(ctx, automationRepo, labels)
 	if err != nil {
-		return nil, fmt.Errorf("find cascade for %s %s on %s %s: %w", op.Dep, op.Version, op.LeafRepo, op.LeafBranch, err)
+		return nil, fmt.Errorf("find cascade for %s %s: %w", op.LeafRepo, op.LeafBranch, err)
 	}
 	for _, existing := range candidates {
-		if ParseVersionFromTitle(existing.Title, op.Dep) != op.Version {
-			continue
-		}
 		st, err := ExtractState(existing.Body)
 		if err != nil {
 			return nil, fmt.Errorf("read state from cascade #%d: %w", existing.Number, err)
 		}
+		if !SameExplicitSources(op.Sources, st.Sources) {
+			continue
+		}
 		mergeState(op, st)
 		return &Issue{Number: existing.Number, Title: existing.Title, URL: existing.URL, Body: existing.Body}, nil
+	}
+
+	for _, existing := range candidates {
+		if supersede == nil {
+			continue
+		}
+		if err := supersede(ctx, &Issue{
+			Number: existing.Number,
+			Title:  existing.Title,
+			URL:    existing.URL,
+			Body:   existing.Body,
+		}); err != nil {
+			return nil, fmt.Errorf("supersede cascade #%d: %w", existing.Number, err)
+		}
 	}
 
 	body, err := renderForCreate(*op)
 	if err != nil {
 		return nil, err
 	}
-	created, err := gh.CreateIssue(ctx, automationRepo, Title(op.Dep, op.Version, op.LeafRepo, op.LeafBranch), body, labels)
+	created, err := gh.CreateIssue(ctx, automationRepo, Title(op.LeafRepo, op.LeafBranch), body, labels)
 	if err != nil {
-		return nil, fmt.Errorf("create cascade for %s %s on %s %s: %w", op.Dep, op.Version, op.LeafRepo, op.LeafBranch, err)
+		return nil, fmt.Errorf("create cascade for %s %s: %w", op.LeafRepo, op.LeafBranch, err)
 	}
 	return &Issue{Number: created.Number, Title: created.Title, URL: created.URL, Body: body}, nil
 }
@@ -69,8 +96,25 @@ func UpdateBody(ctx context.Context, gh *ghclient.Client, automationRepo string,
 // state from `st` onto matching stage/bump positions and adopt CurrentStage
 // from `st`. Mismatched shapes are kept from `op` (the recompute) on the
 // theory that a config change since cascade creation should be visible.
+//
+// Source overlay: if stored has a Sources entry for a name in op.Sources,
+// take the stored Version. Pins paired-latest to whatever was resolved at
+// creation time, even if a newer release has dropped since.
 func mergeState(op *Op, st Persistent) {
 	op.CurrentStage = st.CurrentStage
+
+	if len(st.Sources) > 0 {
+		storedSources := make(map[string]Source, len(st.Sources))
+		for _, s := range st.Sources {
+			storedSources[s.Name] = s
+		}
+		for i := range op.Sources {
+			if s, ok := storedSources[op.Sources[i].Name]; ok && s.Version != "" {
+				op.Sources[i].Version = s.Version
+			}
+		}
+	}
+
 	for i := range op.Stages {
 		if i >= len(st.Stages) {
 			break

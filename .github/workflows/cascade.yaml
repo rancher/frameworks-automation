@@ -1,33 +1,32 @@
 name: Cascade
 
-# Manual entrypoint for a strategy-2 cascade: walk a (dep, version) up the
-# DAG to a chosen rancher branch one stage at a time, opening bump PRs at
-# each layer and prompting a re-tag at every intermediate layer (devs run
-# the per-repo Release workflow with the next-patch version).
+# Manual entrypoint for a multi-source cascade: walk the DAG one stage at a
+# time toward a chosen rancher branch, opening bump PRs at each layer and
+# prompting a re-tag at every intermediate layer (devs run the per-repo
+# Release workflow with the next-patch version).
 #
-# Used at release prep or for behavior-altering bumps where every
-# intermediate must CI against the new dep before shipping. Day-to-day
-# bumps still go via the dispatch (auto-PR) path; cascades are opt-in.
+# Inputs:
+#   - rancher_branch: required. The leaf branch the cascade lands on.
+#   - One optional version input per known independent (currently: wrangler).
+#     Empty means "don't include this independent" — the cascade still picks
+#     up paired components (steve, etc.) at their latest tag for the matching
+#     leaf branch.
 #
-# `dep`, `version`, `rancher_branch` are all required. The cascade tracker
-# becomes the single URL to bookmark — it shows every stage's status and
-# tag prompts as the cascade progresses.
+# When new independents are added to dependencies.yaml, add a matching input
+# here and a matching shell branch below.
 
 on:
   workflow_dispatch:
     inputs:
-      dep:
-        description: 'source dep config-key (e.g. wrangler, lasso)'
-        required: true
-        type: string
-      version:
-        description: 'source dep version (e.g. v0.5.1)'
-        required: true
-        type: string
       rancher_branch:
         description: 'leaf rancher branch the cascade lands on (e.g. main, release/v2.13)'
         required: true
         type: string
+      wrangler:
+        description: 'optional: wrangler version (e.g. v0.5.2). Leave empty to skip an explicit wrangler bump.'
+        required: false
+        type: string
+        default: ''
 
 # Share the reconciler lock — cascade mutates trackers that cron and
 # tag-emitted touch, so runs must not race.
@@ -54,18 +53,28 @@ jobs:
       - name: Run reconciler (cascade)
         # Inputs flow in via env to keep them out of the rendered shell —
         # values are user-controlled and we don't want them interpreted as
-        # shell.
+        # shell. INDEPS is built by appending name=version pairs for each
+        # non-empty independent input.
         env:
           AUTOMATION_REPO: ${{ github.repository }}
           GH_BOT_TOKEN: ${{ secrets.GH_BOT_TOKEN }}
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
-          DEP: ${{ inputs.dep }}
-          VERSION: ${{ inputs.version }}
           RANCHER_BRANCH: ${{ inputs.rancher_branch }}
+          WRANGLER: ${{ inputs.wrangler }}
         run: |
+          INDEPS=""
+          append() {
+            if [ -n "$2" ]; then
+              if [ -n "$INDEPS" ]; then
+                INDEPS="$INDEPS,$1=$2"
+              else
+                INDEPS="$1=$2"
+              fi
+            fi
+          }
+          append wrangler "$WRANGLER"
           go run ./cmd/reconciler \
             -mode=cascade \
-            -dep="$DEP" \
-            -version="$VERSION" \
-            -leaf-branch="$RANCHER_BRANCH"
+            -leaf-branch="$RANCHER_BRANCH" \
+            -independents="$INDEPS"

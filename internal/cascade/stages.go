@@ -7,74 +7,99 @@ import (
 	"github.com/rancher/release-automation/internal/config"
 )
 
-// ComputeStages plans the cascade stages from `dep` (the source) to
-// `leafRepo`/`leafBranch` (the final target). The algorithm:
+// LatestResolver returns the highest published release tag on `repo`'s
+// `branch`. The cascade package uses it to pin paired-latest source versions
+// at cascade creation. Returns "" with no error when no tag exists on the
+// branch lineage (caller decides if that's fatal).
+type LatestResolver func(repo, branch string) (string, error)
+
+// ComputeStages plans a multi-source cascade. Inputs:
 //
-//  1. Find the in-scope repos: every repo on a reverse-dep path from `dep`
-//     to `leafRepo`. `dep` is layer 0 (source, not a stage). `leafRepo` is
-//     in scope by definition.
-//  2. Layer assignment: for each in-scope repo R, layer(R) = 1 + max(layer
-//     of R's in-scope direct deps). This puts each repo strictly after
-//     every in-scope dep it transitively needs.
-//  3. Stages: group in-scope repos by layer (ascending, layer ≥ 1).
-//  4. Per-repo bumps: each repo R in a stage gets one Bump that bundles
-//     every in-scope direct dep R needs. The source-dep entry is pre-filled
-//     with `version`; later-stage entries start Version="" and are filled
-//     when prior stages tag.
-//  5. Per-stage tags: a non-final stage's TagPrompts cover that stage's
-//     repos (one prompt per repo, on its stage branch).
+//   - independents: explicit user-supplied source independents → version.
+//     Each entry's repo must exist in cfg and be kind=independent. Empty map
+//     means "no explicit sources — just pick up paired-latest into leaf".
+//   - leafRepo / leafBranch: the final consumer.
+//   - leafTable / pairedTables: VERSION.md tables for branch resolution.
+//   - resolveLatest: callback returning the latest release tag on a paired
+//     dep's leaf-paired branch. Used when a paired dep is needed by a stage
+//     repo but isn't itself in the propagation set (no re-cut required).
 //
-// Branch resolution per stage repo:
-//   - leafRepo → leafBranch (verified to exist in leafTable)
-//   - paired   → leafTable.LookupMinor(leafBranch) → tbl.BranchForPair(minor)
-//   - independent → "main" (independents have no leaf-branch pairing; the
-//     project policy is to land independent bumps on main only)
+// Algorithm:
 //
-// Errors:
-//   - dep or leafRepo not in cfg
-//   - leafRepo not kind=leaf
-//   - leafBranch not in leafTable
-//   - paired dependent missing its VERSION.md table
-//   - paired dependent's table has no row for the leaf minor (the dep
-//     simply doesn't ship against this leaf line yet)
-//   - no path from dep to leafRepo (cascade is a no-op)
+//  1. propagation = forward(independents) ∩ backward(leaf) ∖ independents.
+//     Repos that must be re-cut because they transitively depend on something
+//     in `independents` and feed leaf.
+//  2. stage_repos = propagation ∪ {leaf}. These get bump PRs (and non-final
+//     stages get tag prompts).
+//  3. For each stage repo, walk its direct deps:
+//     - in independents → explicit source. Bundle entry pinned at given version.
+//     - in propagation → bundle entry empty (Version="") until upstream tag arrives.
+//     - paired and not in propagation → resolveLatest. Becomes implicit
+//     paired-latest source.
+//     - independent and not in independents → SKIP (out of scope).
+//  4. Layer assignment: sources at layer 0; iterative relaxation for stage repos.
+//  5. Stages = layers ≥ 1. Non-final stages get one TagPrompt per stage repo.
+//
+// Returns the ordered source list (explicit + paired-latest, for body display)
+// and the planned stages.
 func ComputeStages(
 	cfg *config.Config,
-	dep, version, leafRepo, leafBranch string,
+	independents map[string]string,
+	leafRepo, leafBranch string,
 	leafTable *config.VersionTable,
-	dependentTables map[string]*config.VersionTable,
-) ([]Stage, error) {
-	if _, ok := cfg.Repos[dep]; !ok {
-		return nil, fmt.Errorf("dep %q not in config", dep)
-	}
+	pairedTables map[string]*config.VersionTable,
+	resolveLatest LatestResolver,
+) ([]Source, []Stage, error) {
 	leaf, ok := cfg.Repos[leafRepo]
 	if !ok {
-		return nil, fmt.Errorf("leaf %q not in config", leafRepo)
+		return nil, nil, fmt.Errorf("leaf %q not in config", leafRepo)
 	}
 	if leaf.Kind != config.KindLeaf {
-		return nil, fmt.Errorf("repo %q is not a leaf", leafRepo)
+		return nil, nil, fmt.Errorf("repo %q is not a leaf", leafRepo)
 	}
 	if leafTable == nil {
-		return nil, fmt.Errorf("leaf %q: missing VERSION.md table", leafRepo)
+		return nil, nil, fmt.Errorf("leaf %q: missing VERSION.md table", leafRepo)
 	}
 	leafMinor := leafTable.LookupMinor(leafBranch)
 	if leafMinor == "" {
-		return nil, fmt.Errorf("leaf %q: branch %q not in VERSION.md", leafRepo, leafBranch)
+		return nil, nil, fmt.Errorf("leaf %q: branch %q not in VERSION.md", leafRepo, leafBranch)
 	}
 
-	scope := inScopeRepos(cfg, dep, leafRepo)
-	if !scope[leafRepo] {
-		return nil, fmt.Errorf("no path from %q to leaf %q", dep, leafRepo)
+	for name := range independents {
+		repo, ok := cfg.Repos[name]
+		if !ok {
+			return nil, nil, fmt.Errorf("source %q not in config", name)
+		}
+		if repo.Kind != config.KindIndependent {
+			return nil, nil, fmt.Errorf("source %q is kind=%s; only independents may be cascade inputs", name, repo.Kind)
+		}
 	}
 
-	layers := assignLayers(cfg, dep, scope)
+	explicitSet := make(map[string]bool, len(independents))
+	for name := range independents {
+		explicitSet[name] = true
+	}
+
+	backward := backwardClosure(cfg, leafRepo)
+	forward := forwardClosure(cfg, explicitSet)
+
+	propagation := map[string]bool{}
+	for r := range forward {
+		if backward[r] && !explicitSet[r] {
+			propagation[r] = true
+		}
+	}
+	stageRepos := map[string]bool{leafRepo: true}
+	for r := range propagation {
+		stageRepos[r] = true
+	}
 
 	branchOf := func(repo string) (string, error) {
 		switch {
 		case repo == leafRepo:
 			return leafBranch, nil
 		case cfg.Repos[repo].Kind == config.KindPaired:
-			tbl, ok := dependentTables[repo]
+			tbl, ok := pairedTables[repo]
 			if !ok || tbl == nil {
 				return "", fmt.Errorf("paired repo %q: missing VERSION.md table", repo)
 			}
@@ -89,13 +114,88 @@ func ComputeStages(
 		return "", fmt.Errorf("repo %q has unsupported kind %q", repo, cfg.Repos[repo].Kind)
 	}
 
-	// Group repos by layer for stage assembly. Skip layer 0 (the source dep).
-	byLayer := map[int][]string{}
-	for repo, layer := range layers {
-		if layer == 0 {
-			continue
+	// Walk every stage repo's direct deps once. This both shapes the bundles
+	// and discovers paired-latest sources (a paired dep referenced by a stage
+	// repo but not itself in propagation needs a pinned latest tag).
+	pairedLatest := map[string]string{}
+	addPairedLatest := func(name string) error {
+		if _, seen := pairedLatest[name]; seen {
+			return nil
 		}
-		byLayer[layer] = append(byLayer[layer], repo)
+		br, err := branchOf(name)
+		if err != nil {
+			return fmt.Errorf("paired-latest %s: %w", name, err)
+		}
+		if resolveLatest == nil {
+			return fmt.Errorf("paired-latest %s: resolver is nil", name)
+		}
+		v, err := resolveLatest(name, br)
+		if err != nil {
+			return fmt.Errorf("paired-latest %s on %s: %w", name, br, err)
+		}
+		if v == "" {
+			return fmt.Errorf("paired-latest %s on %s: no published release", name, br)
+		}
+		pairedLatest[name] = v
+		return nil
+	}
+
+	type stageDep struct {
+		Dep, Module, Version string
+	}
+	bundleByRepo := map[string][]stageDep{}
+	for repo := range stageRepos {
+		deps := append([]string(nil), cfg.Repos[repo].Deps...)
+		sort.Strings(deps)
+		for _, d := range deps {
+			depCfg, ok := cfg.Repos[d]
+			if !ok {
+				continue
+			}
+			switch {
+			case explicitSet[d]:
+				bundleByRepo[repo] = append(bundleByRepo[repo], stageDep{
+					Dep: d, Module: depCfg.Module, Version: independents[d],
+				})
+			case propagation[d]:
+				bundleByRepo[repo] = append(bundleByRepo[repo], stageDep{
+					Dep: d, Module: depCfg.Module,
+				})
+			case depCfg.Kind == config.KindPaired:
+				if err := addPairedLatest(d); err != nil {
+					return nil, nil, err
+				}
+				bundleByRepo[repo] = append(bundleByRepo[repo], stageDep{
+					Dep: d, Module: depCfg.Module, Version: pairedLatest[d],
+				})
+			default:
+				// Independent not in user input → out of scope. Skip.
+			}
+		}
+	}
+
+	var sources []Source
+	for name, v := range independents {
+		sources = append(sources, Source{Name: name, Version: v, Explicit: true})
+	}
+	for name, v := range pairedLatest {
+		sources = append(sources, Source{Name: name, Version: v})
+	}
+	sort.Slice(sources, func(i, j int) bool { return sources[i].Name < sources[j].Name })
+
+	sourceSet := map[string]bool{}
+	for _, s := range sources {
+		sourceSet[s.Name] = true
+	}
+	layers := assignLayers(cfg, sourceSet, stageRepos)
+
+	byLayer := map[int][]string{}
+	for repo := range stageRepos {
+		l, ok := layers[repo]
+		if !ok {
+			return nil, nil, fmt.Errorf("layer assignment failed for %q (cycle or unreachable from sources)", repo)
+		}
+		byLayer[l] = append(byLayer[l], repo)
 	}
 	layerNums := make([]int, 0, len(byLayer))
 	for l := range byLayer {
@@ -107,132 +207,135 @@ func ComputeStages(
 	for idx, layer := range layerNums {
 		repos := byLayer[layer]
 		sort.Strings(repos)
-
 		var bumps []Bump
 		for _, repo := range repos {
-			repoBranch, err := branchOf(repo)
-			if err != nil {
-				return nil, err
-			}
-			// Bundle every direct in-scope dep into a single Bump for this
-			// (repo, branch). Sorted by dep name for stable ordering. The
-			// source dep is included like any other, but pre-filled with
-			// `version`; the rest start empty and fill when prior tags arrive.
-			deps := append([]string(nil), cfg.Repos[repo].Deps...)
-			sort.Strings(deps)
-			var bundle []DepBump
-			for _, d := range deps {
-				if !scope[d] {
-					continue
-				}
-				item := DepBump{Dep: d, Module: cfg.Repos[d].Module}
-				if d == dep {
-					item.Version = version
-				}
-				bundle = append(bundle, item)
-			}
-			if len(bundle) == 0 {
+			entries := bundleByRepo[repo]
+			if len(entries) == 0 {
 				continue
 			}
-			bumps = append(bumps, Bump{Repo: repo, Branch: repoBranch, Deps: bundle})
+			sort.Slice(entries, func(i, j int) bool { return entries[i].Dep < entries[j].Dep })
+			bundle := make([]DepBump, len(entries))
+			for i, e := range entries {
+				bundle[i] = DepBump{Dep: e.Dep, Module: e.Module, Version: e.Version}
+			}
+			br, err := branchOf(repo)
+			if err != nil {
+				return nil, nil, err
+			}
+			bumps = append(bumps, Bump{Repo: repo, Branch: br, Deps: bundle})
 		}
-
 		var tags []TagPrompt
 		isFinal := idx == len(layerNums)-1
 		if !isFinal {
 			for _, repo := range repos {
-				repoBranch, err := branchOf(repo)
-				if err != nil {
-					return nil, err
+				if len(bundleByRepo[repo]) == 0 {
+					continue
 				}
-				tags = append(tags, TagPrompt{Repo: repo, Branch: repoBranch})
+				br, err := branchOf(repo)
+				if err != nil {
+					return nil, nil, err
+				}
+				tags = append(tags, TagPrompt{Repo: repo, Branch: br})
 			}
 		}
-
 		stages = append(stages, Stage{Layer: layer, Bumps: bumps, Tags: tags})
 	}
-	return stages, nil
-}
 
-// inScopeRepos returns the set of repos on at least one reverse-dep path
-// from `dep` to `leafRepo`. dep itself is included (layer 0). leafRepo is
-// included iff a path exists.
-func inScopeRepos(cfg *config.Config, dep, leafRepo string) map[string]bool {
-	// Forward reachability from dep along reverse-dep edges (dep → R when
-	// R declares dep in its Deps).
-	forward := map[string]bool{dep: true}
-	queue := []string{dep}
-	for len(queue) > 0 {
-		cur := queue[0]
-		queue = queue[1:]
-		for _, r := range cfg.Dependents(cur) {
-			if !forward[r] {
-				forward[r] = true
-				queue = append(queue, r)
-			}
+	hasBumps := false
+	for _, st := range stages {
+		if len(st.Bumps) > 0 {
+			hasBumps = true
+			break
 		}
 	}
-	if !forward[leafRepo] {
-		return map[string]bool{} // no path → empty scope
+	if !hasBumps {
+		return nil, nil, fmt.Errorf("nothing to bump for %s %s (no in-scope deps)", leafRepo, leafBranch)
 	}
+	return sources, stages, nil
+}
 
-	// Backward reachability from leafRepo along forward-dep edges.
-	backward := map[string]bool{leafRepo: true}
-	queue = []string{leafRepo}
+// backwardClosure returns every repo from which `root` is forward-reachable
+// (i.e. root + every direct/transitive dep of root).
+func backwardClosure(cfg *config.Config, root string) map[string]bool {
+	out := map[string]bool{root: true}
+	queue := []string{root}
 	for len(queue) > 0 {
 		cur := queue[0]
 		queue = queue[1:]
 		for _, d := range cfg.Repos[cur].Deps {
-			if !backward[d] {
-				backward[d] = true
+			if !out[d] {
+				out[d] = true
 				queue = append(queue, d)
 			}
-		}
-	}
-
-	out := map[string]bool{}
-	for r := range forward {
-		if backward[r] {
-			out[r] = true
 		}
 	}
 	return out
 }
 
-// assignLayers computes layer numbers for in-scope repos. dep == 0; every
-// other in-scope repo R == 1 + max(layer of R's in-scope direct deps).
-//
-// Iterative relaxation until stable. Cycles (which the DAG validator should
-// have rejected) would loop forever — guard with a max iteration cap.
-func assignLayers(cfg *config.Config, dep string, scope map[string]bool) map[string]int {
-	layers := map[string]int{dep: 0}
+// forwardClosure returns every repo reachable from any element of `roots`
+// along reverse-dep edges (R is reachable from X if R declares X in Deps).
+// Roots themselves are included.
+func forwardClosure(cfg *config.Config, roots map[string]bool) map[string]bool {
+	out := make(map[string]bool, len(roots))
+	var queue []string
+	for r := range roots {
+		out[r] = true
+		queue = append(queue, r)
+	}
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		for _, r := range cfg.Dependents(cur) {
+			if !out[r] {
+				out[r] = true
+				queue = append(queue, r)
+			}
+		}
+	}
+	return out
+}
+
+// assignLayers computes layer numbers. Sources sit at layer 0; each stage
+// repo R's layer = 1 + max(layer of R's in-scope direct deps), where in-scope
+// means "source or stage repo". Iterative relaxation until stable.
+func assignLayers(cfg *config.Config, sources, stageRepos map[string]bool) map[string]int {
+	layers := map[string]int{}
+	for r := range sources {
+		layers[r] = 0
+	}
+	inScope := func(r string) bool { return sources[r] || stageRepos[r] }
 	const maxIter = 100
 	for iter := 0; iter < maxIter; iter++ {
 		changed := false
-		for r := range scope {
-			if r == dep {
+		for r := range stageRepos {
+			if sources[r] {
 				continue
 			}
 			best := -1
+			ready := true
 			for _, d := range cfg.Repos[r].Deps {
-				if !scope[d] {
+				if !inScope(d) {
 					continue
 				}
 				dl, ok := layers[d]
 				if !ok {
-					best = -1
+					ready = false
 					break
 				}
 				if dl > best {
 					best = dl
 				}
 			}
+			if !ready {
+				continue
+			}
+			want := 1
 			if best >= 0 {
-				want := best + 1
-				if cur, ok := layers[r]; !ok || cur < want {
-					layers[r] = want
-					changed = true
-				}
+				want = best + 1
+			}
+			if cur, ok := layers[r]; !ok || cur < want {
+				layers[r] = want
+				changed = true
 			}
 		}
 		if !changed {

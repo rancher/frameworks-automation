@@ -16,50 +16,61 @@ import (
 )
 
 // RunCascade is the cascade entrypoint. The .github/workflows/cascade.yaml
-// dispatches the reconciler with -mode=cascade to walk a (dep, version)
-// up the DAG to a leaf branch, opening one stage of bump PRs at a time and
-// prompting a re-tag at each intermediate layer.
+// dispatches the reconciler with -mode=cascade to walk a multi-source
+// cascade up the DAG to a leaf branch, opening one stage of bump PRs at a
+// time and prompting a re-tag at each intermediate layer.
 //
-// The cascade is self-contained: it owns its own PRs, separate from the
-// per-(dep, version) bump-op trackers used by the dispatch + bump-dep
-// paths. Cascade-mid tags arriving via tag-emitted dispatch are claimed by
-// open cascades and don't trigger regular bump-op PRs (see pass1Dispatch).
+// `independents` is the user-supplied source set: a map of independent dep
+// name to target version. Empty means "no explicit independents — just
+// pick up paired-latest into leaf". Paired deps are always picked up at
+// the highest existing tag on the leaf-paired branch (paired-latest); the
+// user doesn't (and shouldn't) supply versions for paired components.
 //
 // Pipeline:
 //
-//  1. Validate inputs; resolve leaf repo.
-//  2. Load VERSION.md tables (leaf + every paired in-scope dependent).
-//  3. cascade.ComputeStages → planned stages.
-//  4. FindOrCreate cascade tracker; merge any prior state.
-//  5. Open stage 1 bump PRs (subsequent stages open as prior tags arrive,
-//     handled in passCascade).
-//  6. Persist state.
-func (r *Reconciler) RunCascade(ctx context.Context, dep, version, leafBranch string) error {
-	if !semver.IsValid(version) {
-		return fmt.Errorf("invalid version %q (not semver)", version)
-	}
+//  1. Validate inputs; resolve leaf repo; assert each independent's version
+//     is a published release.
+//  2. Load VERSION.md tables (leaf + every paired in cfg).
+//  3. cascade.ComputeStages → planned stages + sources (explicit + paired-latest).
+//  4. FindOrCreate cascade tracker (per-leaf-branch identity); supersedes any
+//     open cascade on the same leaf with a different explicit-source set.
+//  5. Open stage 1 bump PRs; subsequent stages open as prior tags arrive
+//     (handled in passCascade).
+//  6. Persist state; run passes 2-4 so in-flight ops keep moving.
+func (r *Reconciler) RunCascade(ctx context.Context, leafBranch string, independents map[string]string) error {
 	if leafBranch == "" {
 		return fmt.Errorf("leaf branch is required")
 	}
-	depRepo, ok := r.cfg.Repos[dep]
-	if !ok {
-		return fmt.Errorf("unknown dep %q", dep)
-	}
-	if err := r.assertReleaseExists(ctx, depRepo, dep, version); err != nil {
-		return err
-	}
-
 	leaves := r.cfg.LeafRepos()
 	if len(leaves) != 1 {
 		return fmt.Errorf("expected exactly one leaf repo, found %d: %v", len(leaves), leaves)
 	}
 	leafRepo := leaves[0]
 
+	for name, version := range independents {
+		if version == "" {
+			return fmt.Errorf("source %q: version is required (omit the input to skip)", name)
+		}
+		if !semver.IsValid(version) {
+			return fmt.Errorf("source %q: invalid version %q (not semver)", name, version)
+		}
+		repoCfg, ok := r.cfg.Repos[name]
+		if !ok {
+			return fmt.Errorf("source %q not in config", name)
+		}
+		if repoCfg.Kind != config.KindIndependent {
+			return fmt.Errorf("source %q is kind=%s; only independents may be cascade inputs", name, repoCfg.Kind)
+		}
+		if err := r.assertReleaseExists(ctx, repoCfg, name, version); err != nil {
+			return err
+		}
+	}
+
 	leafTable, err := r.fetchVersionTable(ctx, leafRepo)
 	if err != nil {
 		return fmt.Errorf("load leaf VERSION.md: %w", err)
 	}
-	dependentTables := make(map[string]*config.VersionTable)
+	pairedTables := make(map[string]*config.VersionTable)
 	for name, repo := range r.cfg.Repos {
 		if repo.Kind != config.KindPaired {
 			continue
@@ -68,36 +79,36 @@ func (r *Reconciler) RunCascade(ctx context.Context, dep, version, leafBranch st
 		if err != nil {
 			return fmt.Errorf("load %s VERSION.md: %w", name, err)
 		}
-		dependentTables[name] = tbl
+		pairedTables[name] = tbl
 	}
 
-	stages, err := cascade.ComputeStages(r.cfg, dep, version, leafRepo, leafBranch, leafTable, dependentTables)
+	resolver := func(name, branch string) (string, error) {
+		return r.resolveLatestForBranch(ctx, name, branch)
+	}
+
+	sources, stages, err := cascade.ComputeStages(r.cfg, independents, leafRepo, leafBranch, leafTable, pairedTables, resolver)
 	if err != nil {
 		return fmt.Errorf("compute cascade stages: %w", err)
 	}
-	if len(stages) == 0 {
-		return fmt.Errorf("compute cascade stages: empty plan")
-	}
-	if err := r.fillTagPromptHints(ctx, stages, leafTable, dependentTables); err != nil {
+	if err := r.fillTagPromptHints(ctx, stages, leafTable, pairedTables); err != nil {
 		// Hints are advisory — log and continue with a barer prompt.
 		log.Printf("cascade: fill tag prompt hints: %v", err)
 	}
 
 	op := cascade.Op{
-		Dep:        dep,
-		Version:    version,
 		LeafRepo:   leafRepo,
 		LeafBranch: leafBranch,
+		Sources:    sources,
 		Stages:     stages,
 	}
 
-	issue, err := cascade.FindOrCreate(ctx, r.gh, r.settings.AutomationRepo, &op)
+	issue, err := cascade.FindOrCreate(ctx, r.gh, r.settings.AutomationRepo, &op, r.supersedeCascade)
 	if err != nil {
 		return err
 	}
-	log.Printf("cascade: tracker for %s %s -> %s %s -> %s", dep, version, leafRepo, leafBranch, issue.URL)
+	log.Printf("cascade: tracker for %s %s -> %s", leafRepo, leafBranch, issue.URL)
 
-	mutated, err := r.openCascadeStageBumps(ctx, &op, op.CurrentStage, issue.URL)
+	mutated, err := r.openCascadeStageBumps(ctx, &op, op.CurrentStage, issue.Number, issue.URL)
 	if err != nil {
 		return err
 	}
@@ -109,6 +120,41 @@ func (r *Reconciler) RunCascade(ctx context.Context, dep, version, leafBranch st
 	return r.passes234(ctx)
 }
 
+// supersedeCascade closes an existing cascade whose explicit-source set has
+// been replaced by a re-trigger. Closes any open bump PRs first so the
+// supersede comment appears in the timeline before the close marker, then
+// closes the issue itself.
+func (r *Reconciler) supersedeCascade(ctx context.Context, old *cascade.Issue) error {
+	log.Printf("cascade: superseding cascade #%d (explicit-source set changed)", old.Number)
+	st, err := cascade.ExtractState(old.Body)
+	if err != nil {
+		log.Printf("cascade: supersede #%d: extract state: %v", old.Number, err)
+	} else {
+		for _, stage := range st.Stages {
+			for _, bp := range stage.Bumps {
+				if bp.PR == 0 || bp.State == "merged" || bp.State == "closed" {
+					continue
+				}
+				downstream, ok := r.cfg.Repos[bp.Repo]
+				if !ok {
+					continue
+				}
+				ghRepo, err := downstream.GitHubRepo()
+				if err != nil {
+					log.Printf("cascade: supersede #%d %s: %v", old.Number, bp.Repo, err)
+					continue
+				}
+				comment := fmt.Sprintf("Superseded by a new cascade on %s with a different source set.", old.Title)
+				if err := r.gh.ClosePR(ctx, ghRepo, bp.PR, comment); err != nil {
+					log.Printf("cascade: supersede #%d close PR %s#%d: %v", old.Number, ghRepo, bp.PR, err)
+				}
+			}
+		}
+	}
+	return r.gh.CloseIssue(ctx, r.settings.AutomationRepo, old.Number,
+		"Superseded by a new cascade with a different explicit-source set.")
+}
+
 // openCascadeStageBumps opens one bump PR per Bump in `op.Stages[stage]`,
 // bundling every Dep in the Bump into a single PR. Mutates op.Stages in
 // place. Returns true when at least one Bump changed.
@@ -117,7 +163,7 @@ func (r *Reconciler) RunCascade(ctx context.Context, dep, version, leafBranch st
 // Version=="" (we wait until every dep in the bundle is resolved before
 // opening — bundling means we can't issue a partial PR and patch in the
 // missing deps later).
-func (r *Reconciler) openCascadeStageBumps(ctx context.Context, op *cascade.Op, stage int, trackerURL string) (bool, error) {
+func (r *Reconciler) openCascadeStageBumps(ctx context.Context, op *cascade.Op, stage, issueNum int, trackerURL string) (bool, error) {
 	if stage < 0 || stage >= len(op.Stages) {
 		return false, nil
 	}
@@ -138,7 +184,7 @@ func (r *Reconciler) openCascadeStageBumps(ctx context.Context, op *cascade.Op, 
 		req := pr.Request{
 			Repo:       downstreamGH,
 			BaseBranch: bp.Branch,
-			HeadBranch: cascadeBumpBranchName(op.Dep, op.Version, op.LeafBranch, bp.Repo, bp.Branch),
+			HeadBranch: cascadeBumpBranchName(issueNum, bp.Repo, bp.Branch),
 			Modules:    bumpModules(bp),
 			TrackerURL: trackerURL,
 		}
@@ -314,6 +360,43 @@ func (r *Reconciler) assertReleaseExists(ctx context.Context, depRepo config.Rep
 	return fmt.Errorf("dep %s has no published release %s on %s", dep, version, ghRepo)
 }
 
+// resolveLatestForBranch returns the highest existing release tag on
+// `repoName`'s `branch` (matched by VERSION.md minor). Used by ComputeStages
+// to pin paired-latest sources at cascade creation. "" with no error means
+// the branch has no published release yet.
+func (r *Reconciler) resolveLatestForBranch(ctx context.Context, repoName, branch string) (string, error) {
+	repoCfg, ok := r.cfg.Repos[repoName]
+	if !ok {
+		return "", fmt.Errorf("repo %q not in config", repoName)
+	}
+	ghRepo, err := repoCfg.GitHubRepo()
+	if err != nil {
+		return "", err
+	}
+	tbl, err := r.fetchVersionTable(ctx, repoName)
+	if err != nil {
+		return "", fmt.Errorf("fetch %s VERSION.md: %w", repoName, err)
+	}
+	minor := tbl.LookupMinor(branch)
+	if minor == "" {
+		return "", fmt.Errorf("branch %q not in %s VERSION.md", branch, repoName)
+	}
+	tags, err := r.gh.ListReleaseTags(ctx, ghRepo)
+	if err != nil {
+		return "", err
+	}
+	var best string
+	for _, t := range tags {
+		if !semver.IsValid(t) || semver.MajorMinor(t) != minor {
+			continue
+		}
+		if best == "" || semver.Compare(t, best) > 0 {
+			best = t
+		}
+	}
+	return best, nil
+}
+
 // fillTagPromptHints populates each TagPrompt's Expected (next-patch
 // suggestion) and WorkflowURL by querying the prompt repo's releases. The
 // minor used for filtering comes from each repo's own VERSION.md row for
@@ -413,17 +496,18 @@ func (r *Reconciler) predictNextPatch(ctx context.Context, ghRepo, minor string)
 }
 
 // cascadeBumpBranchName is the canonical head-branch name for a cascade bump
-// PR. Includes the cascade identity (dep+version+leaf) and the bump's
-// (repo, branch) so that:
+// PR. Stable per (cascade issue, bump position) so:
 //
-//   - Two cascades for different versions of the same dep don't collide.
-//   - Within a cascade, each stage's per-(repo, branch) bump gets a distinct
-//     branch.
-//   - Stable across reconciler runs so re-runs idempotently dedupe via
-//     ListOpenPRsByHead.
-func cascadeBumpBranchName(cascDep, cascVersion, leafBranch, bumpRepo, bumpBranch string) string {
-	leaf := strings.ReplaceAll(leafBranch, "/", "-")
+//   - Re-runs idempotently dedupe via ListOpenPRsByHead (same branch → same
+//     existing PR, not a duplicate).
+//   - Different cascades on the same leaf branch (after supersede creates a
+//     new issue with new sources) get distinct branch names — no collision
+//     with the superseded cascade's now-closed PRs.
+//
+// The cascade issue number is the disambiguator; including the bump's
+// (repo, branch) keeps multi-bump cascades on different head branches inside
+// each downstream repo.
+func cascadeBumpBranchName(cascadeIssue int, bumpRepo, bumpBranch string) string {
 	br := strings.ReplaceAll(bumpBranch, "/", "-")
-	return fmt.Sprintf("automation/cascade-%s-%s-leaf-%s-bump-%s-%s",
-		cascDep, cascVersion, leaf, bumpRepo, br)
+	return fmt.Sprintf("automation/cascade-%d-bump-%s-%s", cascadeIssue, bumpRepo, br)
 }

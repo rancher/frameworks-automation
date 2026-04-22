@@ -1,24 +1,25 @@
 // Package cascade owns the lifecycle of cascade tracker issues. A cascade
-// propagates a single (dep, version) up the dependency DAG to a target leaf
-// branch, opening bump PRs one layer at a time and prompting a re-tag at
-// each intermediate layer so every layer CIs against the new dep before the
-// next layer ships.
+// propagates a set of source dep versions up the dependency DAG to a target
+// leaf branch, opening bump PRs one layer at a time and prompting a re-tag
+// at each intermediate layer so every layer CIs against the new dep set
+// before the next layer ships.
 //
 // Cascade is self-contained: it owns its own PRs (separate from the
 // per-(dep, version) bump-op trackers) and its own Slack thread. While a
-// cascade is active for (dep, leafBranch), the reconciler's auto-dispatch
-// path defers cascade-mid tags to the cascade rather than opening regular
-// bump-op trackers (see pass1 coordination).
+// cascade is active for a leaf branch, the reconciler's auto-dispatch path
+// defers cascade-mid tags to the cascade rather than opening regular bump-op
+// trackers (see pass1 coordination).
 //
-// Tracker identity is (dep, version, leaf-branch). Lookup is by labels:
-// `cascade-op`, `dep:<name>`, `leaf:<leaf-repo>:<leaf-branch>`. The version
-// lives in the title (parsed by ParseVersionFromTitle) — same approach as
-// the bump-op tracker, for the same reason (avoid a label per version).
+// Tracker identity is (leafRepo, leafBranch). Lookup is by labels:
+// `cascade-op`, `leaf:<leaf-repo>:<leaf-branch>`. The source set lives in
+// the metadata block — re-runs that match on explicit sources merge state;
+// re-runs with a different explicit-source set supersede.
 package cascade
 
 import (
 	"bytes"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -27,19 +28,31 @@ import (
 
 const (
 	LabelOp      = "cascade-op"
-	LabelDepFmt  = "dep:%s"
 	LabelLeafFmt = "leaf:%s:%s"
 
 	stateOpen  = "<!-- cascade-op-state v1"
 	stateClose = "-->"
 )
 
-// titlePrefixFmt matches Title(): "[cascade] {dep} {version} → {leafRepo} {leafBranch}".
-// Stable — ParseVersionFromTitle relies on the prefix and the " → " separator.
-const (
-	titlePrefixFmt = "[cascade] %s "
-	titleArrow     = " → "
-)
+// Source identifies one (dep, version) feeding the cascade.
+//
+// Explicit=true means the user supplied the version when triggering the
+// cascade (the only valid kinds are independents). Explicit=false means
+// the cascade auto-resolved the version (paired-latest: a paired dep on
+// the leaf-paired branch is always picked up at its highest existing tag,
+// even when the user didn't ask for an explicit bump — that's how rancher
+// stays current with paired components like steve/webhook on every cascade).
+//
+// The Explicit subset is the supersede key: re-running the cascade with the
+// same explicit sources merges state; a different explicit set supersedes.
+// Paired-latest can drift between runs without forcing supersede — but once
+// pinned at cascade creation, mergeState keeps it pinned across re-runs so
+// the cascade doesn't move its goal post mid-flight.
+type Source struct {
+	Name     string `yaml:"name"`
+	Version  string `yaml:"version"`
+	Explicit bool   `yaml:"explicit,omitempty"`
+}
 
 // Bump is one bump-PR slot inside a cascade stage. There's exactly one Bump
 // per (Repo, Branch) per stage — every in-scope dep that needs bumping at
@@ -48,8 +61,7 @@ const (
 // combined post-bump tree.
 //
 // Within a Bump, each Dep's Version is fixed at cascade creation when known
-// (the source dep, in the stage that bumps it directly) or "" until a prior
-// stage's tag arrives.
+// (explicit + paired-latest sources) or "" until a prior stage's tag arrives.
 type Bump struct {
 	Repo   string    `yaml:"repo"`
 	Branch string    `yaml:"branch"`
@@ -101,10 +113,9 @@ type Stage struct {
 // Op identifies a cascade and its planned stages. CurrentStage is 0-indexed
 // into Stages and tracks how far we've advanced.
 type Op struct {
-	Dep          string
-	Version      string
 	LeafRepo     string
 	LeafBranch   string
+	Sources      []Source
 	Stages       []Stage
 	CurrentStage int
 }
@@ -112,23 +123,24 @@ type Op struct {
 // Persistent is what survives between reconciler runs (lives in the metadata
 // block). Additive only — older runs must read newer files.
 type Persistent struct {
-	SlackThreadTS string  `yaml:"slack_thread_ts,omitempty"`
-	Stages        []Stage `yaml:"stages"`
-	CurrentStage  int     `yaml:"current_stage"`
+	SlackThreadTS string   `yaml:"slack_thread_ts,omitempty"`
+	Sources       []Source `yaml:"sources,omitempty"`
+	Stages        []Stage  `yaml:"stages"`
+	CurrentStage  int      `yaml:"current_stage"`
 }
 
-// Title is the canonical issue title for a cascade. Parsed back out by
-// ParseVersionFromTitle — keep the format stable.
-func Title(dep, version, leafRepo, leafBranch string) string {
-	return fmt.Sprintf(titlePrefixFmt+"%s"+titleArrow+"%s %s", dep, version, leafRepo, leafBranch)
+// Title is the canonical issue title for a cascade. The (leaf, branch) pair
+// is the cascade's identity — the source set lives in the metadata block.
+func Title(leafRepo, leafBranch string) string {
+	return fmt.Sprintf("[cascade] %s %s", leafRepo, leafBranch)
 }
 
-// Labels returns the canonical label set. Version is not a label (would
-// proliferate one per release); it lives in the title.
-func Labels(dep, leafRepo, leafBranch string) []string {
+// Labels returns the canonical label set. Source dep names are not labels:
+// (a) one cascade can have many sources, (b) the source set is supersede-
+// controlled (see SameExplicitSources), so labels can't track it cleanly.
+func Labels(leafRepo, leafBranch string) []string {
 	return []string{
 		LabelOp,
-		fmt.Sprintf(LabelDepFmt, dep),
 		fmt.Sprintf(LabelLeafFmt, leafRepo, leafBranch),
 	}
 }
@@ -138,26 +150,56 @@ func LeafLabel(leafRepo, leafBranch string) string {
 	return fmt.Sprintf(LabelLeafFmt, leafRepo, leafBranch)
 }
 
-// ParseVersionFromTitle returns the version embedded in `title` for `dep`,
-// or "" if `title` doesn't match the canonical cascade format.
-func ParseVersionFromTitle(title, dep string) string {
-	prefix := fmt.Sprintf(titlePrefixFmt, dep)
-	if !strings.HasPrefix(title, prefix) {
-		return ""
+// ExplicitSources returns the user-input subset of sources, sorted by Name.
+// This is the supersede comparison key.
+func ExplicitSources(sources []Source) []Source {
+	var out []Source
+	for _, s := range sources {
+		if s.Explicit {
+			out = append(out, s)
+		}
 	}
-	rest := strings.TrimPrefix(title, prefix)
-	i := strings.Index(rest, titleArrow)
-	if i < 0 {
-		return ""
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// SameExplicitSources reports whether two source slices have the same explicit
+// {Name, Version} set (order-independent). Paired-latest entries are ignored:
+// a re-run with the same user input shouldn't trigger supersede just because
+// a paired dep cut a new tag in the meantime.
+func SameExplicitSources(a, b []Source) bool {
+	ax := ExplicitSources(a)
+	bx := ExplicitSources(b)
+	if len(ax) != len(bx) {
+		return false
 	}
-	return rest[:i]
+	for i := range ax {
+		if ax[i].Name != bx[i].Name || ax[i].Version != bx[i].Version {
+			return false
+		}
+	}
+	return true
 }
 
 // Render produces the cascade issue body markdown with embedded state.
 // Idempotent (same Op + same time → same body).
 func Render(op Op, now time.Time) (string, error) {
 	var b strings.Builder
-	fmt.Fprintf(&b, "## Cascade\n%s %s → %s %s\n\n", op.Dep, op.Version, op.LeafRepo, op.LeafBranch)
+	fmt.Fprintf(&b, "## Cascade\n%s %s\n\n", op.LeafRepo, op.LeafBranch)
+
+	if len(op.Sources) > 0 {
+		b.WriteString("## Sources\n")
+		sorted := append([]Source(nil), op.Sources...)
+		sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
+		for _, s := range sorted {
+			kind := "paired-latest"
+			if s.Explicit {
+				kind = "explicit"
+			}
+			fmt.Fprintf(&b, "- %s %s (%s)\n", s.Name, s.Version, kind)
+		}
+		b.WriteString("\n")
+	}
 
 	for i, st := range op.Stages {
 		marker := ""
@@ -194,6 +236,7 @@ func Render(op Op, now time.Time) (string, error) {
 		op.CurrentStage+1, len(op.Stages), now.UTC().Format(time.RFC3339))
 
 	body, err := EmbedState(b.String(), Persistent{
+		Sources:      op.Sources,
 		Stages:       op.Stages,
 		CurrentStage: op.CurrentStage,
 	})

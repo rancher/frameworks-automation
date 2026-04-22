@@ -11,9 +11,11 @@
 //	                that ships against a chosen leaf branch — used for the
 //	                independent-lib release/* case where the auto path
 //	                only touches `main`.
-//	-mode=cascade   Manual cascade: walk a (dep, version) up the DAG to a
-//	                chosen leaf branch one stage at a time, prompting a
-//	                re-tag at each intermediate layer.
+//	-mode=cascade   Multi-source cascade onto a chosen leaf branch. Walks
+//	                the DAG one stage at a time, prompting a re-tag at each
+//	                intermediate layer. Independent dep versions come in
+//	                via -independents=name=ver,name=ver; paired deps are
+//	                always picked up at their paired-branch latest tag.
 package main
 
 import (
@@ -22,6 +24,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 
 	"github.com/rancher/release-automation/internal/config"
 	"github.com/rancher/release-automation/internal/reconcile"
@@ -29,14 +32,15 @@ import (
 
 func main() {
 	var (
-		mode       = flag.String("mode", "cron", "cron|dispatch|bump-dep")
-		configPath = flag.String("config", "dependencies.yaml", "path to dependencies.yaml")
-		repo       = flag.String("repo", "", "dispatch mode: owner/name of repo that emitted the tag")
-		tag        = flag.String("tag", "", "dispatch mode: tag that was emitted (e.g. v0.7.5)")
-		sha        = flag.String("sha", "", "dispatch mode: commit SHA the tag points at")
-		dep        = flag.String("dep", "", "bump-dep|cascade mode: dep config key (e.g. wrangler)")
-		version    = flag.String("version", "", "bump-dep|cascade mode: version to bump/cascade (e.g. v0.5.1)")
-		leafBranch = flag.String("leaf-branch", "", "bump-dep|cascade mode: leaf-repo branch the op targets (e.g. release/v2.13)")
+		mode         = flag.String("mode", "cron", "cron|dispatch|bump-dep|cascade")
+		configPath   = flag.String("config", "dependencies.yaml", "path to dependencies.yaml")
+		repo         = flag.String("repo", "", "dispatch mode: owner/name of repo that emitted the tag")
+		tag          = flag.String("tag", "", "dispatch mode: tag that was emitted (e.g. v0.7.5)")
+		sha          = flag.String("sha", "", "dispatch mode: commit SHA the tag points at")
+		dep          = flag.String("dep", "", "bump-dep mode: dep config key (e.g. wrangler)")
+		version      = flag.String("version", "", "bump-dep mode: version to bump (e.g. v0.5.1)")
+		leafBranch   = flag.String("leaf-branch", "", "bump-dep|cascade mode: leaf-repo branch the op targets (e.g. release/v2.13)")
+		independents = flag.String("independents", "", "cascade mode: comma-separated independent=version pairs (e.g. wrangler=v0.5.2,lasso=v1.0.0). Empty means no explicit independents — paired deps still get picked up at their latest tag.")
 	)
 	flag.Parse()
 
@@ -71,15 +75,46 @@ func main() {
 			log.Fatalf("bump-dep: %v", err)
 		}
 	case "cascade":
-		if *dep == "" || *version == "" || *leafBranch == "" {
-			log.Fatalf("cascade: -dep, -version, -leaf-branch are all required")
+		if *leafBranch == "" {
+			log.Fatalf("cascade: -leaf-branch is required")
 		}
-		if err := r.RunCascade(ctx, *dep, *version, *leafBranch); err != nil {
+		indep, err := parseIndependents(*independents)
+		if err != nil {
+			log.Fatalf("cascade: %v", err)
+		}
+		if err := r.RunCascade(ctx, *leafBranch, indep); err != nil {
 			log.Fatalf("cascade: %v", err)
 		}
 	default:
 		log.Fatalf("unknown mode %q", *mode)
 	}
+}
+
+// parseIndependents parses "name=ver,name=ver" into a map. Whitespace and
+// trailing commas tolerated so the workflow shell can concatenate optional
+// inputs naively.
+func parseIndependents(s string) (map[string]string, error) {
+	out := map[string]string{}
+	if s == "" {
+		return out, nil
+	}
+	for _, kv := range strings.Split(s, ",") {
+		kv = strings.TrimSpace(kv)
+		if kv == "" {
+			continue
+		}
+		eq := strings.IndexByte(kv, '=')
+		if eq <= 0 {
+			return nil, fmt.Errorf("independent %q: want name=version", kv)
+		}
+		name := strings.TrimSpace(kv[:eq])
+		version := strings.TrimSpace(kv[eq+1:])
+		if name == "" || version == "" {
+			return nil, fmt.Errorf("independent %q: name and version are both required", kv)
+		}
+		out[name] = version
+	}
+	return out, nil
 }
 
 func envSettings() reconcile.Settings {

@@ -36,27 +36,18 @@ func (r *Reconciler) passCascade(ctx context.Context) error {
 }
 
 func (r *Reconciler) advanceCascade(ctx context.Context, issue *ghclient.Issue) error {
-	dep := depFromLabels(issue.Labels)
-	if dep == "" {
-		return fmt.Errorf("no dep:* label")
-	}
 	leafRepo, leafBranch := leafFromLabels(issue.Labels)
 	if leafRepo == "" || leafBranch == "" {
 		return fmt.Errorf("no leaf:* label")
-	}
-	version := cascade.ParseVersionFromTitle(issue.Title, dep)
-	if version == "" {
-		return fmt.Errorf("title %q has no parseable version for dep %q", issue.Title, dep)
 	}
 	st, err := cascade.ExtractState(issue.Body)
 	if err != nil {
 		return fmt.Errorf("extract state: %w", err)
 	}
 	op := cascade.Op{
-		Dep:          dep,
-		Version:      version,
 		LeafRepo:     leafRepo,
 		LeafBranch:   leafBranch,
+		Sources:      st.Sources,
 		Stages:       st.Stages,
 		CurrentStage: st.CurrentStage,
 	}
@@ -66,7 +57,7 @@ func (r *Reconciler) advanceCascade(ctx context.Context, issue *ghclient.Issue) 
 	}
 
 	for {
-		advanced, err := r.maybeAdvanceCascadeStage(ctx, &op, issue.URL)
+		advanced, err := r.maybeAdvanceCascadeStage(ctx, &op, issue.Number, issue.URL)
 		if err != nil {
 			return err
 		}
@@ -136,7 +127,7 @@ func (r *Reconciler) pollCascadeBumps(ctx context.Context, op *cascade.Op) (bool
 //     advance CurrentStage, fill next-stage bump versions from tag versions,
 //     and open the new stage's bumps.
 //   - Otherwise: no advance.
-func (r *Reconciler) maybeAdvanceCascadeStage(ctx context.Context, op *cascade.Op, trackerURL string) (bool, error) {
+func (r *Reconciler) maybeAdvanceCascadeStage(ctx context.Context, op *cascade.Op, issueNum int, trackerURL string) (bool, error) {
 	if op.CurrentStage >= len(op.Stages) {
 		return false, nil
 	}
@@ -165,16 +156,16 @@ func (r *Reconciler) maybeAdvanceCascadeStage(ctx context.Context, op *cascade.O
 		for j := range next.Bumps[i].Deps {
 			d := &next.Bumps[i].Deps[j]
 			if d.Version != "" {
-				continue // pre-filled at cascade creation (e.g. source dep)
+				continue // pre-filled at cascade creation (source dep or paired-latest)
 			}
 			if v, ok := taggedVersion[d.Dep]; ok {
 				d.Version = v
 			}
 		}
 	}
-	log.Printf("passCascade: advanced to stage %d/%d (%s -> %s %s)",
-		op.CurrentStage+1, len(op.Stages), op.Dep, op.LeafRepo, op.LeafBranch)
-	if _, err := r.openCascadeStageBumps(ctx, op, op.CurrentStage, trackerURL); err != nil {
+	log.Printf("passCascade: advanced to stage %d/%d (%s %s)",
+		op.CurrentStage+1, len(op.Stages), op.LeafRepo, op.LeafBranch)
+	if _, err := r.openCascadeStageBumps(ctx, op, op.CurrentStage, issueNum, trackerURL); err != nil {
 		return true, err
 	}
 	return true, nil
@@ -255,15 +246,11 @@ func (r *Reconciler) tryClaimCascadeTag(ctx context.Context, dep, version string
 		if !claimed {
 			continue
 		}
-		// Reconstruct an Op so we can re-render with the canonical layout.
-		cascDep := depFromLabels(issue.Labels)
 		leafRepo, leafBranch := leafFromLabels(issue.Labels)
-		cascVersion := cascade.ParseVersionFromTitle(issue.Title, cascDep)
 		op := cascade.Op{
-			Dep:          cascDep,
-			Version:      cascVersion,
 			LeafRepo:     leafRepo,
 			LeafBranch:   leafBranch,
+			Sources:      st.Sources,
 			Stages:       st.Stages,
 			CurrentStage: st.CurrentStage,
 		}

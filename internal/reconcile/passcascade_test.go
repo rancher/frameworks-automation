@@ -94,9 +94,19 @@ func TestLeafFromLabels(t *testing.T) {
 }
 
 func TestCascadeBumpBranchName(t *testing.T) {
-	got := cascadeBumpBranchName("wrangler", "v0.5.1", "release/v2.13", "wrangler", "v0.5.1")
-	want := "automation/cascade-wrangler-v0.5.1-leaf-release-v2.13-bump-wrangler-v0.5.1"
-	if got != want {
-		t.Errorf("got %q want %q", got, want)
+	cases := []struct {
+		name         string
+		issue        int
+		bumpRepo     string
+		bumpBranch   string
+		want         string
+	}{
+		{"main", 42, "rancher", "main", "automation/cascade-42-bump-rancher-main"},
+		{"release branch slashes flattened", 99, "steve", "release/v0.7", "automation/cascade-99-bump-steve-release-v0.7"},
+	}
+	for _, c := range cases {
+		if got := cascadeBumpBranchName(c.issue, c.bumpRepo, c.bumpBranch); got != c.want {
+			t.Errorf("%s: got %q want %q", c.name, got, c.want)
+		}
 	}
 }
