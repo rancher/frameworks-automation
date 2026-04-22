@@ -41,19 +41,32 @@ const (
 	titleArrow     = " → "
 )
 
-// Bump is one bump-PR slot inside a cascade stage. A stage may have several
-// (e.g. final stage in a fan-in DAG bumps every direct in-scope dep into the
-// leaf). Versions for stage-1 bumps are fixed at cascade creation; later
-// stages have Version == "" until prior stages emit tags.
+// Bump is one bump-PR slot inside a cascade stage. There's exactly one Bump
+// per (Repo, Branch) per stage — every in-scope dep that needs bumping at
+// this layer rides in the same PR (Deps). Bundling avoids sibling-PR conflicts
+// on go.mod/go.sum and matches what the cascade-mid tag CIs against: the
+// combined post-bump tree.
+//
+// Within a Bump, each Dep's Version is fixed at cascade creation when known
+// (the source dep, in the stage that bumps it directly) or "" until a prior
+// stage's tag arrives.
 type Bump struct {
-	Repo    string `yaml:"repo"`
-	Branch  string `yaml:"branch"`
-	Dep     string `yaml:"dep"`              // which dep is being bumped here
-	Module  string `yaml:"module"`           // Go module path of Dep
+	Repo   string    `yaml:"repo"`
+	Branch string    `yaml:"branch"`
+	Deps   []DepBump `yaml:"deps"`
+	PR     int       `yaml:"pr,omitempty"`
+	PRURL  string    `yaml:"pr_url,omitempty"`
+	State  string    `yaml:"state,omitempty"` // "" | open | ci-failing | approved | merged | closed
+}
+
+// DepBump is one (dep, module, version) triple inside a Bump's bundle.
+// `Dep` is the config-key name of the dep being bumped (e.g. "wrangler");
+// `Module` is its Go module path; `Version` is the target tag, "" until a
+// prior stage's tag arrives.
+type DepBump struct {
+	Dep     string `yaml:"dep"`
+	Module  string `yaml:"module"`
 	Version string `yaml:"version,omitempty"`
-	PR      int    `yaml:"pr,omitempty"`
-	PRURL   string `yaml:"pr_url,omitempty"`
-	State   string `yaml:"state,omitempty"`  // "" | open | ci-failing | approved | merged | closed
 }
 
 // TagPrompt is one tag the cascade waits on at the end of a non-final stage.
@@ -165,7 +178,7 @@ func Render(op Op, now time.Time) (string, error) {
 			if bp.State == "merged" {
 				check = "x"
 			}
-			fmt.Fprintf(&b, "- [%s] bump `%s` `%s` — %s (%s@%s)\n", check, bp.Repo, bp.Branch, renderBumpRef(bp), bp.Dep, displayVersion(bp.Version))
+			fmt.Fprintf(&b, "- [%s] bump `%s` `%s` — %s (%s)\n", check, bp.Repo, bp.Branch, renderBumpRef(bp), renderDepList(bp.Deps))
 		}
 		for _, tg := range st.Tags {
 			check := " "
@@ -195,6 +208,19 @@ func displayVersion(v string) string {
 		return "_pending_"
 	}
 	return v
+}
+
+// renderDepList formats a Bump's bundled deps as "dep1@ver1, dep2@ver2".
+// Pending deps render as "dep@_pending_".
+func renderDepList(deps []DepBump) string {
+	if len(deps) == 0 {
+		return ""
+	}
+	parts := make([]string, len(deps))
+	for i, d := range deps {
+		parts[i] = fmt.Sprintf("%s@%s", d.Dep, displayVersion(d.Version))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func displayState(s string) string {

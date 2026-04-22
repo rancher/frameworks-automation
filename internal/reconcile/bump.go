@@ -124,14 +124,13 @@ func (r *Reconciler) bumpTarget(ctx context.Context, dep, version, leafBranch, d
 		Repo:       downstreamGH,
 		BaseBranch: target.Branch,
 		HeadBranch: bumpBranchName(dep, version, leafBranch),
-		Module:     depModule,
-		Version:    version,
+		Modules:    []pr.Module{{Path: depModule, Version: version}},
 		TrackerURL: trackerURL,
 	}
-	log.Printf("bump: opening %s -> %s base=%s head=%s", req.Module+"@"+req.Version, req.Repo, req.BaseBranch, req.HeadBranch)
+	log.Printf("bump: opening %s@%s -> %s base=%s head=%s", depModule, version, req.Repo, req.BaseBranch, req.HeadBranch)
 	res, err := r.bumper.Open(ctx, req)
 	if err != nil {
-		return false, fmt.Errorf("bump %s on %s %s: %w", req.Module, req.Repo, req.BaseBranch, err)
+		return false, fmt.Errorf("bump %s on %s %s: %w", depModule, req.Repo, req.BaseBranch, err)
 	}
 	log.Printf("bump: %s", res.Notes)
 	switch {

@@ -76,22 +76,34 @@ func mergeState(op *Op, st Persistent) {
 			break
 		}
 		stored := st.Stages[i]
-		// Bumps overlay by (Repo, Branch, Dep) — the stable identity of a
-		// bump within a stage.
+		// Bumps overlay by (Repo, Branch) — one Bump per (repo, branch) per
+		// stage, so that's the stable identity. Per-dep Version values
+		// overlay by Dep name within the matching Bump.
 		idx := make(map[string]int, len(stored.Bumps))
 		for j, bp := range stored.Bumps {
-			idx[bp.Repo+"|"+bp.Branch+"|"+bp.Dep] = j
+			idx[bp.Repo+"|"+bp.Branch] = j
 		}
 		for k := range op.Stages[i].Bumps {
 			cur := op.Stages[i].Bumps[k]
-			if j, ok := idx[cur.Repo+"|"+cur.Branch+"|"+cur.Dep]; ok {
-				stb := stored.Bumps[j]
-				if stb.Version != "" {
-					op.Stages[i].Bumps[k].Version = stb.Version
+			j, ok := idx[cur.Repo+"|"+cur.Branch]
+			if !ok {
+				continue
+			}
+			stb := stored.Bumps[j]
+			op.Stages[i].Bumps[k].PR = stb.PR
+			op.Stages[i].Bumps[k].PRURL = stb.PRURL
+			op.Stages[i].Bumps[k].State = stb.State
+			depIdx := make(map[string]int, len(stb.Deps))
+			for d, dp := range stb.Deps {
+				depIdx[dp.Dep] = d
+			}
+			for d := range op.Stages[i].Bumps[k].Deps {
+				curDep := op.Stages[i].Bumps[k].Deps[d]
+				if storedAt, ok := depIdx[curDep.Dep]; ok {
+					if v := stb.Deps[storedAt].Version; v != "" {
+						op.Stages[i].Bumps[k].Deps[d].Version = v
+					}
 				}
-				op.Stages[i].Bumps[k].PR = stb.PR
-				op.Stages[i].Bumps[k].PRURL = stb.PRURL
-				op.Stages[i].Bumps[k].State = stb.State
 			}
 		}
 		// Tags overlay by (Repo, Branch) — what we wait on.

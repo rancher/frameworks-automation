@@ -17,9 +17,10 @@ import (
 //     of R's in-scope direct deps). This puts each repo strictly after
 //     every in-scope dep it transitively needs.
 //  3. Stages: group in-scope repos by layer (ascending, layer ≥ 1).
-//  4. Per-repo bumps: each repo R in a stage bumps every in-scope direct
-//     dep. Stage-1 bumps are pre-filled with `version`; later-stage bumps
-//     have Version="" until prior tags arrive.
+//  4. Per-repo bumps: each repo R in a stage gets one Bump that bundles
+//     every in-scope direct dep R needs. The source-dep entry is pre-filled
+//     with `version`; later-stage entries start Version="" and are filled
+//     when prior stages tag.
 //  5. Per-stage tags: a non-final stage's TagPrompts cover that stage's
 //     repos (one prompt per repo, on its stage branch).
 //
@@ -113,27 +114,27 @@ func ComputeStages(
 			if err != nil {
 				return nil, err
 			}
-			// The repo bumps every direct in-scope dep, sorted for stable
-			// ordering. dep == cascade source is included like any other.
+			// Bundle every direct in-scope dep into a single Bump for this
+			// (repo, branch). Sorted by dep name for stable ordering. The
+			// source dep is included like any other, but pre-filled with
+			// `version`; the rest start empty and fill when prior tags arrive.
 			deps := append([]string(nil), cfg.Repos[repo].Deps...)
 			sort.Strings(deps)
+			var bundle []DepBump
 			for _, d := range deps {
 				if !scope[d] {
 					continue
 				}
-				bp := Bump{
-					Repo:   repo,
-					Branch: repoBranch,
-					Dep:    d,
-					Module: cfg.Repos[d].Module,
-				}
+				item := DepBump{Dep: d, Module: cfg.Repos[d].Module}
 				if d == dep {
-					// Stage-1 (and any later stage that bumps the source
-					// dep directly) gets the source version up front.
-					bp.Version = version
+					item.Version = version
 				}
-				bumps = append(bumps, bp)
+				bundle = append(bundle, item)
 			}
+			if len(bundle) == 0 {
+				continue
+			}
+			bumps = append(bumps, Bump{Repo: repo, Branch: repoBranch, Deps: bundle})
 		}
 
 		var tags []TagPrompt

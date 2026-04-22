@@ -46,19 +46,23 @@ func TestComputeStages_LinearChain(t *testing.T) {
 	// Stage 1: bump wrangler in steve main, prompt steve tag.
 	want1 := Stage{
 		Layer: 1,
-		Bumps: []Bump{{Repo: "steve", Branch: "main", Dep: "wrangler", Module: "github.com/x/wrangler", Version: "v0.5.1"}},
-		Tags:  []TagPrompt{{Repo: "steve", Branch: "main"}},
+		Bumps: []Bump{{Repo: "steve", Branch: "main",
+			Deps: []DepBump{{Dep: "wrangler", Module: "github.com/x/wrangler", Version: "v0.5.1"}}}},
+		Tags: []TagPrompt{{Repo: "steve", Branch: "main"}},
 	}
 	if !reflect.DeepEqual(stages[0], want1) {
 		t.Errorf("stage 1: got %+v want %+v", stages[0], want1)
 	}
-	// Stage 2 (final): bump steve AND wrangler into rancher main, no tag prompt.
+	// Stage 2 (final): bump steve AND wrangler into rancher main, no tag
+	// prompt. One Bump bundling both deps — wrangler pre-filled (source dep),
+	// steve empty until the stage-1 tag arrives.
 	want2 := Stage{
 		Layer: 2,
-		Bumps: []Bump{
-			{Repo: "rancher", Branch: "main", Dep: "steve", Module: "github.com/x/steve"},
-			{Repo: "rancher", Branch: "main", Dep: "wrangler", Module: "github.com/x/wrangler", Version: "v0.5.1"},
-		},
+		Bumps: []Bump{{Repo: "rancher", Branch: "main",
+			Deps: []DepBump{
+				{Dep: "steve", Module: "github.com/x/steve"},
+				{Dep: "wrangler", Module: "github.com/x/wrangler", Version: "v0.5.1"},
+			}}},
 	}
 	if !reflect.DeepEqual(stages[1], want2) {
 		t.Errorf("stage 2: got %+v want %+v", stages[1], want2)
@@ -77,6 +81,9 @@ func TestComputeStages_PairedReleaseBranch(t *testing.T) {
 	}
 	if stages[0].Bumps[0].Repo != "steve" || stages[0].Bumps[0].Branch != "release/v0.7" {
 		t.Errorf("stage 1 should target steve release/v0.7: %+v", stages[0].Bumps)
+	}
+	if len(stages[0].Bumps[0].Deps) != 1 || stages[0].Bumps[0].Deps[0].Dep != "wrangler" {
+		t.Errorf("stage 1 bump should bundle wrangler: %+v", stages[0].Bumps[0].Deps)
 	}
 	if stages[0].Tags[0].Branch != "release/v0.7" {
 		t.Errorf("stage 1 tag prompt should be on release/v0.7: %+v", stages[0].Tags)
@@ -130,32 +137,42 @@ func TestComputeStages_FanInDAG(t *testing.T) {
 	if len(stages) != 2 {
 		t.Fatalf("want 2 stages, got %d: %+v", len(stages), stages)
 	}
-	// Stage 1: B + C (sorted), each bumping D, with tag prompts for both.
+	// Stage 1: B + C (sorted), each a one-(repo, branch) Bump bumping D, with
+	// tag prompts for both.
 	if len(stages[0].Bumps) != 2 || stages[0].Bumps[0].Repo != "B" || stages[0].Bumps[1].Repo != "C" {
 		t.Errorf("stage 1 bumps: %+v", stages[0].Bumps)
+	}
+	for _, bp := range stages[0].Bumps {
+		if len(bp.Deps) != 1 || bp.Deps[0].Dep != "D" || bp.Deps[0].Version != "vNEW" {
+			t.Errorf("stage 1 %s bump should bundle D@vNEW: %+v", bp.Repo, bp.Deps)
+		}
 	}
 	if len(stages[0].Tags) != 2 {
 		t.Errorf("stage 1 tag prompts: %+v", stages[0].Tags)
 	}
-	// Stage 2: A bumping B, C, D (sorted; D=source has Version pre-filled).
-	if len(stages[1].Bumps) != 3 {
-		t.Fatalf("stage 2 bumps len: %+v", stages[1].Bumps)
+	// Stage 2: one A Bump bundling B, C, D (sorted; D=source has Version
+	// pre-filled, B and C empty until stage-1 tags arrive).
+	if len(stages[1].Bumps) != 1 {
+		t.Fatalf("stage 2 should be one Bump for A: %+v", stages[1].Bumps)
 	}
-	gotDeps := []string{stages[1].Bumps[0].Dep, stages[1].Bumps[1].Dep, stages[1].Bumps[2].Dep}
+	a := stages[1].Bumps[0]
+	if a.Repo != "A" || len(a.Deps) != 3 {
+		t.Fatalf("stage 2 bump: %+v", a)
+	}
+	gotDeps := []string{a.Deps[0].Dep, a.Deps[1].Dep, a.Deps[2].Dep}
 	want := []string{"B", "C", "D"}
 	if !reflect.DeepEqual(gotDeps, want) {
 		t.Errorf("stage 2 dep order: got %v want %v", gotDeps, want)
 	}
-	// D bump in stage 2 has the source version; B and C don't yet.
-	for _, b := range stages[1].Bumps {
-		switch b.Dep {
+	for _, d := range a.Deps {
+		switch d.Dep {
 		case "D":
-			if b.Version != "vNEW" {
-				t.Errorf("D bump should have source version: %+v", b)
+			if d.Version != "vNEW" {
+				t.Errorf("D entry should have source version: %+v", d)
 			}
 		case "B", "C":
-			if b.Version != "" {
-				t.Errorf("%s bump should be empty until tag arrives: %+v", b.Dep, b)
+			if d.Version != "" {
+				t.Errorf("%s entry should be empty until tag arrives: %+v", d.Dep, d)
 			}
 		}
 	}

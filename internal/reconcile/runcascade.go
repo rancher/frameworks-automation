@@ -103,11 +103,14 @@ func (r *Reconciler) RunCascade(ctx context.Context, dep, version, leafBranch st
 	return r.passes234(ctx)
 }
 
-// openCascadeStageBumps opens a bump PR for every bump in `op.Stages[stage]`
-// that has a Version set but no PR yet. Mutates op.Stages in place. Returns
-// true when at least one bump changed.
+// openCascadeStageBumps opens one bump PR per Bump in `op.Stages[stage]`,
+// bundling every Dep in the Bump into a single PR. Mutates op.Stages in
+// place. Returns true when at least one Bump changed.
 //
-// Bumps with Version=="" are skipped — those wait on a prior stage's tag.
+// A Bump is skipped if it already has a PR, or if any of its Deps still has
+// Version=="" (we wait until every dep in the bundle is resolved before
+// opening — bundling means we can't issue a partial PR and patch in the
+// missing deps later).
 func (r *Reconciler) openCascadeStageBumps(ctx context.Context, op *cascade.Op, stage int, trackerURL string) (bool, error) {
 	if stage < 0 || stage >= len(op.Stages) {
 		return false, nil
@@ -115,7 +118,7 @@ func (r *Reconciler) openCascadeStageBumps(ctx context.Context, op *cascade.Op, 
 	mutated := false
 	for i := range op.Stages[stage].Bumps {
 		bp := &op.Stages[stage].Bumps[i]
-		if bp.PR != 0 || bp.Version == "" {
+		if bp.PR != 0 || !bumpReady(bp) {
 			continue
 		}
 		downstream, ok := r.cfg.Repos[bp.Repo]
@@ -129,16 +132,15 @@ func (r *Reconciler) openCascadeStageBumps(ctx context.Context, op *cascade.Op, 
 		req := pr.Request{
 			Repo:       downstreamGH,
 			BaseBranch: bp.Branch,
-			HeadBranch: cascadeBumpBranchName(op.Dep, op.Version, op.LeafBranch, bp.Dep, bp.Version),
-			Module:     bp.Module,
-			Version:    bp.Version,
+			HeadBranch: cascadeBumpBranchName(op.Dep, op.Version, op.LeafBranch, bp.Repo, bp.Branch),
+			Modules:    bumpModules(bp),
 			TrackerURL: trackerURL,
 		}
-		log.Printf("cascade: opening stage %d %s@%s -> %s base=%s head=%s",
-			op.Stages[stage].Layer, req.Module, req.Version, req.Repo, req.BaseBranch, req.HeadBranch)
+		log.Printf("cascade: opening stage %d %s %s -> %s base=%s head=%s",
+			op.Stages[stage].Layer, bp.Repo, bp.Branch, req.Repo, req.BaseBranch, req.HeadBranch)
 		res, err := r.bumper.Open(ctx, req)
 		if err != nil {
-			return mutated, fmt.Errorf("cascade bump %s on %s %s: %w", req.Module, req.Repo, req.BaseBranch, err)
+			return mutated, fmt.Errorf("cascade bump %s on %s %s: %w", bp.Repo, req.Repo, req.BaseBranch, err)
 		}
 		log.Printf("cascade: %s", res.Notes)
 		switch {
@@ -153,6 +155,29 @@ func (r *Reconciler) openCascadeStageBumps(ctx context.Context, op *cascade.Op, 
 		}
 	}
 	return mutated, nil
+}
+
+// bumpReady reports whether every Dep in `bp` has a non-empty Version. We
+// only open a Bump's PR once the whole bundle is resolved, since cascades
+// can't go back and add deps to an existing PR without rebasing it.
+func bumpReady(bp *cascade.Bump) bool {
+	if len(bp.Deps) == 0 {
+		return false
+	}
+	for _, d := range bp.Deps {
+		if d.Version == "" {
+			return false
+		}
+	}
+	return true
+}
+
+func bumpModules(bp *cascade.Bump) []pr.Module {
+	out := make([]pr.Module, len(bp.Deps))
+	for i, d := range bp.Deps {
+		out[i] = pr.Module{Path: d.Module, Version: d.Version}
+	}
+	return out
 }
 
 // fillTagPromptHints populates each TagPrompt's Expected (next-patch
@@ -254,15 +279,17 @@ func (r *Reconciler) predictNextPatch(ctx context.Context, ghRepo, minor string)
 }
 
 // cascadeBumpBranchName is the canonical head-branch name for a cascade bump
-// PR. Includes both the cascade identity (dep+version+leaf) AND the per-bump
-// dep+version so that:
+// PR. Includes the cascade identity (dep+version+leaf) and the bump's
+// (repo, branch) so that:
 //
 //   - Two cascades for different versions of the same dep don't collide.
-//   - Within a cascade, each stage's bumps get a distinct branch.
+//   - Within a cascade, each stage's per-(repo, branch) bump gets a distinct
+//     branch.
 //   - Stable across reconciler runs so re-runs idempotently dedupe via
 //     ListOpenPRsByHead.
-func cascadeBumpBranchName(cascDep, cascVersion, leafBranch, bumpDep, bumpVersion string) string {
+func cascadeBumpBranchName(cascDep, cascVersion, leafBranch, bumpRepo, bumpBranch string) string {
 	leaf := strings.ReplaceAll(leafBranch, "/", "-")
+	br := strings.ReplaceAll(bumpBranch, "/", "-")
 	return fmt.Sprintf("automation/cascade-%s-%s-leaf-%s-bump-%s-%s",
-		cascDep, cascVersion, leaf, bumpDep, bumpVersion)
+		cascDep, cascVersion, leaf, bumpRepo, br)
 }

@@ -32,15 +32,22 @@ func NewBumper(gh *ghclient.Client, token string) *Bumper {
 	return &Bumper{gh: gh, token: token}
 }
 
-// Request describes a single bump-PR job.
+// Request describes a single bump-PR job. Modules may carry one entry (the
+// regular bump path) or several (cascade stages bundle every dep that lands
+// at a layer into one PR — see internal/cascade).
 type Request struct {
-	Repo       string // downstream owner/name, e.g. "rancher/rancher"
-	BaseBranch string // e.g. "main", "release/v2.13"
-	HeadBranch string // e.g. "automation/bump-steve-v0.7.5"
-	Module     string // dep module path, e.g. "github.com/rancher/steve"
-	Version    string // dep tag, e.g. "v0.7.5"
+	Repo       string   // downstream owner/name, e.g. "rancher/rancher"
+	BaseBranch string   // e.g. "main", "release/v2.13"
+	HeadBranch string   // e.g. "automation/bump-steve-v0.7.5"
+	Modules    []Module // one or more (path, version) pairs to bump
 	// TrackerURL is included in the PR body so reviewers can find the op.
 	TrackerURL string
+}
+
+// Module is one (Go module path, target version) pair within a Request.
+type Module struct {
+	Path    string // e.g. "github.com/rancher/steve"
+	Version string // e.g. "v0.7.5"
 }
 
 type Result struct {
@@ -88,8 +95,10 @@ func (b *Bumper) Open(ctx context.Context, req Request) (*Result, error) {
 		return nil, err
 	}
 
-	if err := runGoGet(ctx, repoDir, req.Module, req.Version); err != nil {
-		return nil, err
+	for _, m := range req.Modules {
+		if err := runGoGet(ctx, repoDir, m.Path, m.Version); err != nil {
+			return nil, err
+		}
 	}
 	if err := run(ctx, repoDir, nil, "go", "mod", "tidy"); err != nil {
 		return nil, err
@@ -106,14 +115,14 @@ func (b *Bumper) Open(ctx context.Context, req Request) (*Result, error) {
 	}
 	if !dirty {
 		return &Result{NoOp: true,
-			Notes: fmt.Sprintf("%s already at %s@%s; nothing to commit", req.Repo, req.Module, req.Version)}, nil
+			Notes: fmt.Sprintf("%s already at %s; nothing to commit", req.Repo, summarizeModules(req.Modules))}, nil
 	}
 
 	if err := run(ctx, repoDir, nil, "git", "add", "-A"); err != nil {
 		return nil, err
 	}
-	commitMsg := fmt.Sprintf("Bump %s to %s", req.Module, req.Version)
-	if err := run(ctx, repoDir, nil, "git", "commit", "-m", commitMsg); err != nil {
+	title := commitTitle(req.Modules)
+	if err := run(ctx, repoDir, nil, "git", "commit", "-m", commitMessage(req.Modules)); err != nil {
 		return nil, err
 	}
 	if err := run(ctx, repoDir, nil, "git", "push", "-u", "origin", req.HeadBranch); err != nil {
@@ -121,7 +130,7 @@ func (b *Bumper) Open(ctx context.Context, req Request) (*Result, error) {
 	}
 
 	pr, err := b.gh.CreatePR(ctx, req.Repo,
-		commitMsg,
+		title,
 		buildPRBody(req),
 		req.HeadBranch,
 		req.BaseBranch,
@@ -161,10 +170,16 @@ func (req Request) validate() error {
 		return errors.New("BaseBranch is required")
 	case req.HeadBranch == "":
 		return errors.New("HeadBranch is required")
-	case req.Module == "":
-		return errors.New("Module is required")
-	case req.Version == "":
-		return errors.New("Version is required")
+	case len(req.Modules) == 0:
+		return errors.New("Modules is required")
+	}
+	for i, m := range req.Modules {
+		if m.Path == "" {
+			return fmt.Errorf("Modules[%d].Path is required", i)
+		}
+		if m.Version == "" {
+			return fmt.Errorf("Modules[%d].Version is required", i)
+		}
 	}
 	return nil
 }
@@ -230,11 +245,54 @@ func scrubToken(err error, token string) error {
 
 func buildPRBody(req Request) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Automated bump of `%s` to `%s` on `%s`.\n\n", req.Module, req.Version, req.BaseBranch)
+	if len(req.Modules) == 1 {
+		m := req.Modules[0]
+		fmt.Fprintf(&b, "Automated bump of `%s` to `%s` on `%s`.\n\n", m.Path, m.Version, req.BaseBranch)
+	} else {
+		fmt.Fprintf(&b, "Automated bump of %d dependencies on `%s`:\n\n", len(req.Modules), req.BaseBranch)
+		for _, m := range req.Modules {
+			fmt.Fprintf(&b, "- `%s` to `%s`\n", m.Path, m.Version)
+		}
+		b.WriteString("\n")
+	}
 	if req.TrackerURL != "" {
 		fmt.Fprintf(&b, "Tracker: %s\n\n", req.TrackerURL)
 	}
 	b.WriteString("This PR was opened by the release-automation reconciler. ")
 	b.WriteString("CI will run on push; review and merge as usual.\n")
 	return b.String()
+}
+
+// commitTitle is the first line of the commit / PR title. Single-module case
+// preserves the legacy "Bump <module> to <version>" string for parity with
+// the regular bump-op path.
+func commitTitle(mods []Module) string {
+	if len(mods) == 1 {
+		return fmt.Sprintf("Bump %s to %s", mods[0].Path, mods[0].Version)
+	}
+	return fmt.Sprintf("Bump %d dependencies", len(mods))
+}
+
+func commitMessage(mods []Module) string {
+	if len(mods) == 1 {
+		return commitTitle(mods)
+	}
+	var b strings.Builder
+	b.WriteString(commitTitle(mods))
+	b.WriteString("\n\n")
+	for _, m := range mods {
+		fmt.Fprintf(&b, "- %s to %s\n", m.Path, m.Version)
+	}
+	return b.String()
+}
+
+func summarizeModules(mods []Module) string {
+	if len(mods) == 1 {
+		return fmt.Sprintf("%s@%s", mods[0].Path, mods[0].Version)
+	}
+	parts := make([]string, len(mods))
+	for i, m := range mods {
+		parts[i] = fmt.Sprintf("%s@%s", m.Path, m.Version)
+	}
+	return strings.Join(parts, ", ")
 }

@@ -153,7 +153,7 @@ func (r *Reconciler) maybeAdvanceCascadeStage(ctx context.Context, op *cascade.O
 	}
 
 	// Build a {dep -> version} map from this stage's recorded tags so the
-	// next stage's bump entries can be filled. A bump's Dep matches one of
+	// next stage's bump entries can be filled. A Dep entry matches one of
 	// the prior stage's repos when the prior stage retagged that repo.
 	taggedVersion := make(map[string]string, len(stage.Tags))
 	for _, tg := range stage.Tags {
@@ -162,12 +162,14 @@ func (r *Reconciler) maybeAdvanceCascadeStage(ctx context.Context, op *cascade.O
 	op.CurrentStage++
 	next := &op.Stages[op.CurrentStage]
 	for i := range next.Bumps {
-		bp := &next.Bumps[i]
-		if bp.Version != "" {
-			continue // pre-filled at cascade creation (e.g. source dep)
-		}
-		if v, ok := taggedVersion[bp.Dep]; ok {
-			bp.Version = v
+		for j := range next.Bumps[i].Deps {
+			d := &next.Bumps[i].Deps[j]
+			if d.Version != "" {
+				continue // pre-filled at cascade creation (e.g. source dep)
+			}
+			if v, ok := taggedVersion[d.Dep]; ok {
+				d.Version = v
+			}
 		}
 	}
 	log.Printf("passCascade: advanced to stage %d/%d (%s -> %s %s)",

@@ -12,8 +12,11 @@ func TestRoundTripState(t *testing.T) {
 		SlackThreadTS: "1729451234.001900",
 		CurrentStage:  1,
 		Stages: []Stage{
-			{Layer: 1, Bumps: []Bump{{Repo: "steve", Branch: "main", Dep: "wrangler", Module: "github.com/x/wrangler", Version: "v0.5.1", PR: 42, State: "merged"}}, Tags: []TagPrompt{{Repo: "steve", Branch: "main", Version: "v0.7.6", Tagged: true}}},
-			{Layer: 2, Bumps: []Bump{{Repo: "rancher", Branch: "main", Dep: "steve", Module: "github.com/x/steve", Version: "v0.7.6", PR: 99, State: "open"}}},
+			{Layer: 1, Bumps: []Bump{{Repo: "steve", Branch: "main", PR: 42, State: "merged",
+				Deps: []DepBump{{Dep: "wrangler", Module: "github.com/x/wrangler", Version: "v0.5.1"}}}},
+				Tags: []TagPrompt{{Repo: "steve", Branch: "main", Version: "v0.7.6", Tagged: true}}},
+			{Layer: 2, Bumps: []Bump{{Repo: "rancher", Branch: "main", PR: 99, State: "open",
+				Deps: []DepBump{{Dep: "steve", Module: "github.com/x/steve", Version: "v0.7.6"}}}}},
 		},
 	}
 	updated, err := EmbedState(body, in)
@@ -30,7 +33,7 @@ func TestRoundTripState(t *testing.T) {
 	if got.CurrentStage != 1 {
 		t.Errorf("current_stage: got %d want 1", got.CurrentStage)
 	}
-	if len(got.Stages) != 2 || got.Stages[0].Bumps[0].PR != 42 || got.Stages[1].Bumps[0].Dep != "steve" {
+	if len(got.Stages) != 2 || got.Stages[0].Bumps[0].PR != 42 || got.Stages[1].Bumps[0].Deps[0].Dep != "steve" {
 		t.Errorf("stages: got %+v", got.Stages)
 	}
 	if !got.Stages[0].Tags[0].Tagged || got.Stages[0].Tags[0].Version != "v0.7.6" {
@@ -70,11 +73,13 @@ func TestRender_BodyContainsStagesAndState(t *testing.T) {
 		CurrentStage: 0,
 		Stages: []Stage{
 			{Layer: 1,
-				Bumps: []Bump{{Repo: "steve", Branch: "main", Dep: "wrangler", Module: "github.com/x/wrangler", Version: "v0.5.1", PR: 42, PRURL: "https://github.com/x/y/pull/42", State: "open"}},
-				Tags:  []TagPrompt{{Repo: "steve", Branch: "main"}},
+				Bumps: []Bump{{Repo: "steve", Branch: "main", PR: 42, PRURL: "https://github.com/x/y/pull/42", State: "open",
+					Deps: []DepBump{{Dep: "wrangler", Module: "github.com/x/wrangler", Version: "v0.5.1"}}}},
+				Tags: []TagPrompt{{Repo: "steve", Branch: "main"}},
 			},
 			{Layer: 2,
-				Bumps: []Bump{{Repo: "rancher", Branch: "main", Dep: "steve", Module: "github.com/x/steve"}},
+				Bumps: []Bump{{Repo: "rancher", Branch: "main",
+					Deps: []DepBump{{Dep: "steve", Module: "github.com/x/steve"}}}},
 			},
 		},
 	}
