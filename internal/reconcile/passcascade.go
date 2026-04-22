@@ -61,28 +61,26 @@ func (r *Reconciler) advanceCascade(ctx context.Context, issue *ghclient.Issue) 
 		CurrentStage: st.CurrentStage,
 	}
 
-	mutated, err := r.pollCascadeBumps(ctx, &op)
-	if err != nil {
+	if _, err := r.pollCascadeBumps(ctx, &op); err != nil {
 		return err
 	}
 
 	for {
-		advanced, openMut, err := r.maybeAdvanceCascadeStage(ctx, &op, issue.URL)
+		advanced, err := r.maybeAdvanceCascadeStage(ctx, &op, issue.URL)
 		if err != nil {
 			return err
-		}
-		if openMut {
-			mutated = true
 		}
 		if !advanced {
 			break
 		}
 	}
 
-	if mutated {
-		if err := cascade.UpdateBody(ctx, r.gh, r.settings.AutomationRepo, issue.Number, op); err != nil {
-			return fmt.Errorf("update body: %w", err)
-		}
+	// Always rewrite the body — same pattern as pass4 dashboards. The body is
+	// a regenerated view (Last reconciled timestamp, render-only fixes), so
+	// gating on state mutation strands cosmetic changes until the next real
+	// transition.
+	if err := cascade.UpdateBody(ctx, r.gh, r.settings.AutomationRepo, issue.Number, op); err != nil {
+		return fmt.Errorf("update body: %w", err)
 	}
 
 	if cascadeComplete(op) {
@@ -138,22 +136,20 @@ func (r *Reconciler) pollCascadeBumps(ctx context.Context, op *cascade.Op) (bool
 //     advance CurrentStage, fill next-stage bump versions from tag versions,
 //     and open the new stage's bumps.
 //   - Otherwise: no advance.
-//
-// Returns (advanced, openMutated, err).
-func (r *Reconciler) maybeAdvanceCascadeStage(ctx context.Context, op *cascade.Op, trackerURL string) (bool, bool, error) {
+func (r *Reconciler) maybeAdvanceCascadeStage(ctx context.Context, op *cascade.Op, trackerURL string) (bool, error) {
 	if op.CurrentStage >= len(op.Stages) {
-		return false, false, nil
+		return false, nil
 	}
 	stage := op.Stages[op.CurrentStage]
 	if !allBumpsMerged(stage) {
-		return false, false, nil
+		return false, nil
 	}
 	if op.CurrentStage == len(op.Stages)-1 {
 		// Final stage merged — no advance, caller handles closing.
-		return false, false, nil
+		return false, nil
 	}
 	if !allTagsSatisfied(stage) {
-		return false, false, nil
+		return false, nil
 	}
 
 	// Build a {dep -> version} map from this stage's recorded tags so the
@@ -176,8 +172,10 @@ func (r *Reconciler) maybeAdvanceCascadeStage(ctx context.Context, op *cascade.O
 	}
 	log.Printf("passCascade: advanced to stage %d/%d (%s -> %s %s)",
 		op.CurrentStage+1, len(op.Stages), op.Dep, op.LeafRepo, op.LeafBranch)
-	openMut, err := r.openCascadeStageBumps(ctx, op, op.CurrentStage, trackerURL)
-	return true, openMut, err
+	if _, err := r.openCascadeStageBumps(ctx, op, op.CurrentStage, trackerURL); err != nil {
+		return true, err
+	}
+	return true, nil
 }
 
 // allBumpsMerged reports whether every bump in `stage` has reached state
