@@ -87,6 +87,9 @@ func (r *Reconciler) passes234(ctx context.Context) error {
 	if err := r.pass3(ctx); err != nil {
 		return fmt.Errorf("pass 3: %w", err)
 	}
+	if err := r.passCascade(ctx); err != nil {
+		return fmt.Errorf("pass cascade: %w", err)
+	}
 	if err := r.pass4(ctx); err != nil {
 		return fmt.Errorf("pass 4: %w", err)
 	}

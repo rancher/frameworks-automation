@@ -11,6 +11,9 @@
 //	                that ships against a chosen leaf branch — used for the
 //	                independent-lib release/* case where the auto path
 //	                only touches `main`.
+//	-mode=cascade   Manual cascade: walk a (dep, version) up the DAG to a
+//	                chosen leaf branch one stage at a time, prompting a
+//	                re-tag at each intermediate layer.
 package main
 
 import (
@@ -31,9 +34,9 @@ func main() {
 		repo       = flag.String("repo", "", "dispatch mode: owner/name of repo that emitted the tag")
 		tag        = flag.String("tag", "", "dispatch mode: tag that was emitted (e.g. v0.7.5)")
 		sha        = flag.String("sha", "", "dispatch mode: commit SHA the tag points at")
-		dep        = flag.String("dep", "", "bump-dep mode: dep config key (e.g. wrangler)")
-		version    = flag.String("version", "", "bump-dep mode: version to bump to (e.g. v0.5.1)")
-		leafBranch = flag.String("leaf-branch", "", "bump-dep mode: leaf-repo branch to fan out across (e.g. release/v2.13)")
+		dep        = flag.String("dep", "", "bump-dep|cascade mode: dep config key (e.g. wrangler)")
+		version    = flag.String("version", "", "bump-dep|cascade mode: version to bump/cascade (e.g. v0.5.1)")
+		leafBranch = flag.String("leaf-branch", "", "bump-dep|cascade mode: leaf-repo branch the op targets (e.g. release/v2.13)")
 	)
 	flag.Parse()
 
@@ -66,6 +69,13 @@ func main() {
 		}
 		if err := r.RunBumpDep(ctx, *dep, *version, *leafBranch); err != nil {
 			log.Fatalf("bump-dep: %v", err)
+		}
+	case "cascade":
+		if *dep == "" || *version == "" || *leafBranch == "" {
+			log.Fatalf("cascade: -dep, -version, -leaf-branch are all required")
+		}
+		if err := r.RunCascade(ctx, *dep, *version, *leafBranch); err != nil {
+			log.Fatalf("cascade: %v", err)
 		}
 	default:
 		log.Fatalf("unknown mode %q", *mode)

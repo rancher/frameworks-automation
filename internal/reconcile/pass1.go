@@ -18,6 +18,12 @@ import (
 // → leaf branch via VERSION.md; independent: always `main` — older
 // release/* branches require a manual `Bump <dep>` workflow run), then
 // hands off to runBump for the rest of the pipeline.
+//
+// Cascade coordination: before opening regular bump-op PRs, the dispatched
+// tag is offered to every open cascade. If any cascade is awaiting a tag
+// for this dep, the cascade claims it (records version+Tagged=true) and
+// pass1Dispatch returns early — the cascade owns the downstream propagation
+// for this tag, opening its next stage's bumps in passCascade.
 func (r *Reconciler) pass1Dispatch(ctx context.Context, ev DispatchEvent) error {
 	if !semver.IsValid(ev.Tag) {
 		return fmt.Errorf("invalid tag %q (not semver)", ev.Tag)
@@ -28,6 +34,15 @@ func (r *Reconciler) pass1Dispatch(ctx context.Context, ev DispatchEvent) error 
 	}
 	if r.cfg.Repos[dep].Kind == config.KindLeaf {
 		log.Printf("pass1: %s is a leaf — nothing to propagate", dep)
+		return nil
+	}
+
+	claimed, err := r.tryClaimCascadeTag(ctx, dep, ev.Tag)
+	if err != nil {
+		return fmt.Errorf("offer tag to open cascades: %w", err)
+	}
+	if claimed {
+		log.Printf("pass1: %s %s claimed by an open cascade — skipping regular bump", dep, ev.Tag)
 		return nil
 	}
 
