@@ -281,7 +281,7 @@ sequenceDiagram
 
     rel->>disp: repository_dispatch tag-emitted {repo, tag, sha}
     disp->>rec: go run -mode=dispatch
-    rec->>gh: list open cascades; offer tag
+    rec->>gh: list open cascades, offer tag
     note right of rec: tryClaimCascadeTag — cascade may absorb the tag
     alt no cascade claimed
         rec->>gh: ComputeTargetsForLeafBranch
