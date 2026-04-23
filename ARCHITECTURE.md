@@ -272,20 +272,20 @@ The dispatch path on a freshly-emitted tag:
 
 ```mermaid
 sequenceDiagram
-    participant rel as Source Repo<br/>(Release workflow)
-    participant disp as automation<br/>tag-emitted.yaml
-    participant rec as Reconciler<br/>(dispatch mode)
+    participant rel as Source Repo (Release workflow)
+    participant disp as tag-emitted.yaml
+    participant rec as Reconciler (dispatch mode)
     participant gh as GitHub
-    participant ds as Downstream<br/>repo
+    participant ds as Downstream repo
     participant slack as Slack
 
-    rel->>disp: repository_dispatch<br/>tag-emitted {repo, tag, sha}
+    rel->>disp: repository_dispatch tag-emitted {repo, tag, sha}
     disp->>rec: go run -mode=dispatch
     rec->>gh: list open cascades; offer tag
-    note right of rec: tryClaimCascadeTag —<br/>cascade may absorb the tag
+    note right of rec: tryClaimCascadeTag — cascade may absorb the tag
     alt no cascade claimed
         rec->>gh: ComputeTargetsForLeafBranch
-        rec->>gh: find-or-create bump-op tracker<br/>(label: dep:X version:Y leaf:Z:B)
+        rec->>gh: find-or-create bump-op tracker (dep:X version:Y leaf:Z:B)
         rec->>gh: close prior-version tracker (supersede)
         loop per target
             rec->>ds: clone, go get, commit, push
