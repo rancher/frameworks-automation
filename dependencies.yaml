@@ -25,10 +25,21 @@ repos:
     module: github.com/tomleb/frameworks-automation-rancher
     deps:
       - steve
+      - webhook
       - wrangler
   steve:
     kind: paired
     module: github.com/tomleb/frameworks-automation-steve
+    deps:
+      - wrangler
+  webhook:
+    kind: paired
+    module: github.com/tomleb/frameworks-automation-webhook
+    deps:
+      - norman
+  norman:
+    kind: paired
+    module: github.com/tomleb/frameworks-automation-norman
     deps:
       - wrangler
   wrangler:
