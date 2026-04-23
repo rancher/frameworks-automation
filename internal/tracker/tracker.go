@@ -148,12 +148,14 @@ func displayState(s string) string {
 }
 
 // renderRef builds the per-target trailing markdown: PR autolink + a state
-// label that's itself a link when there's a useful destination. Examples:
+// label that's itself a link when there's a useful destination. Non-terminal
+// targets also get a trailing checks link so debugging an in-flight bump is
+// one click away. Examples:
 //
-//	_pending_                                       (no PR yet)
-//	[#42](url) (open)                               (PR open, no extra link)
-//	[#88](url) ([ci-failing](url/checks))           (state -> PR checks tab)
-//	[#15](url) (merged)                             (terminal state)
+//	_pending_                                                       (no PR yet)
+//	[#42](url) (open · [checks](url/checks))                        (PR open)
+//	[#88](url) ([ci-failing](url/checks) · [checks](url/checks))    (failing)
+//	[#15](url) (merged)                                             (terminal)
 //
 // /pull/N/checks works for both GHA and third-party check-runs, so it's a
 // useful target without requiring an extra API call.
@@ -165,10 +167,19 @@ func renderRef(t Target) string {
 	if t.State == "ci-failing" && t.PRURL != "" {
 		state = fmt.Sprintf("[%s](%s/checks)", state, t.PRURL)
 	}
+	if t.PRURL != "" && !isTerminalState(t.State) {
+		state = fmt.Sprintf("%s · [checks](%s/checks)", state, t.PRURL)
+	}
 	if t.PRURL == "" {
 		return fmt.Sprintf("#%d (%s)", t.PR, state)
 	}
 	return fmt.Sprintf("[#%d](%s) (%s)", t.PR, t.PRURL, state)
+}
+
+// isTerminalState mirrors reconcile.isTerminal — duplicated here to avoid
+// importing the reconcile package from tracker (would create a cycle).
+func isTerminalState(s string) bool {
+	return s == "merged" || s == "closed"
 }
 
 // ExtractState pulls the metadata block out of an issue body. Returns

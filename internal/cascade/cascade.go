@@ -316,10 +316,19 @@ func renderBumpRef(b Bump) string {
 	if b.State == "ci-failing" && b.PRURL != "" {
 		state = fmt.Sprintf("[%s](%s/checks)", state, b.PRURL)
 	}
+	if b.PRURL != "" && !isTerminalState(b.State) {
+		state = fmt.Sprintf("%s · [checks](%s/checks)", state, b.PRURL)
+	}
 	if b.PRURL == "" {
 		return fmt.Sprintf("#%d (%s)", b.PR, state)
 	}
 	return fmt.Sprintf("[#%d](%s) (%s)", b.PR, b.PRURL, state)
+}
+
+// isTerminalState mirrors reconcile.isTerminal — duplicated here to avoid
+// importing the reconcile package from cascade (would create a cycle).
+func isTerminalState(s string) bool {
+	return s == "merged" || s == "closed"
 }
 
 // ExtractState pulls the metadata block out of a cascade issue body. Returns

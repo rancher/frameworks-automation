@@ -107,7 +107,7 @@ func TestRender_BodyContainsStagesAndState(t *testing.T) {
 	if !strings.Contains(body, "Stage 2: bump (final)") {
 		t.Errorf("body missing stage 2 final marker: %s", body)
 	}
-	if !strings.Contains(body, "[#42](https://github.com/x/y/pull/42) (open)") {
+	if !strings.Contains(body, "[#42](https://github.com/x/y/pull/42) (open · [checks](https://github.com/x/y/pull/42/checks))") {
 		t.Errorf("body missing linked PR ref: %s", body)
 	}
 	if !strings.Contains(body, "(steve@_pending_)") {
@@ -180,10 +180,11 @@ func TestRenderBumpRef(t *testing.T) {
 	}{
 		{"no PR yet", Bump{}, "_pending_"},
 		{"no-op already at target", Bump{State: "merged"}, "already up to date"},
-		{"open with URL", Bump{PR: 42, PRURL: "https://x/pull/42", State: "open"}, "[#42](https://x/pull/42) (open)"},
-		{"empty state defaults to open", Bump{PR: 42, PRURL: "https://x/pull/42"}, "[#42](https://x/pull/42) (open)"},
-		{"ci-failing links to checks", Bump{PR: 88, PRURL: "https://x/pull/88", State: "ci-failing"}, "[#88](https://x/pull/88) ([ci-failing](https://x/pull/88/checks))"},
+		{"open with URL", Bump{PR: 42, PRURL: "https://x/pull/42", State: "open"}, "[#42](https://x/pull/42) (open · [checks](https://x/pull/42/checks))"},
+		{"empty state defaults to open", Bump{PR: 42, PRURL: "https://x/pull/42"}, "[#42](https://x/pull/42) (open · [checks](https://x/pull/42/checks))"},
+		{"ci-failing links to checks", Bump{PR: 88, PRURL: "https://x/pull/88", State: "ci-failing"}, "[#88](https://x/pull/88) ([ci-failing](https://x/pull/88/checks) · [checks](https://x/pull/88/checks))"},
 		{"merged terminal", Bump{PR: 15, PRURL: "https://x/pull/15", State: "merged"}, "[#15](https://x/pull/15) (merged)"},
+		{"closed terminal", Bump{PR: 16, PRURL: "https://x/pull/16", State: "closed"}, "[#16](https://x/pull/16) (closed)"},
 		{"missing URL falls back to plain", Bump{PR: 7, State: "open"}, "#7 (open)"},
 	}
 	for _, c := range cases {

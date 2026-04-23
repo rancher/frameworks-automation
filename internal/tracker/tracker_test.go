@@ -73,7 +73,7 @@ func TestRender_BodyContainsTargetsAndState(t *testing.T) {
 			t.Errorf("body missing trigger: %s", body)
 		}
 	}
-	if !strings.Contains(body, "[#1234](") || !strings.Contains(body, "(open)") {
+	if !strings.Contains(body, "[#1234](") || !strings.Contains(body, "(open · [checks](") {
 		t.Errorf("body missing linked PR ref: %s", body)
 	}
 	if !strings.Contains(body, "_pending_") {
@@ -159,13 +159,15 @@ func TestRenderRef(t *testing.T) {
 	}{
 		{"no PR yet", Target{}, "_pending_"},
 		{"open with URL", Target{PR: 42, PRURL: "https://github.com/rancher/steve/pull/42", State: "open"},
-			"[#42](https://github.com/rancher/steve/pull/42) (open)"},
+			"[#42](https://github.com/rancher/steve/pull/42) (open · [checks](https://github.com/rancher/steve/pull/42/checks))"},
 		{"empty state defaults to open", Target{PR: 42, PRURL: "https://x/pull/42"},
-			"[#42](https://x/pull/42) (open)"},
+			"[#42](https://x/pull/42) (open · [checks](https://x/pull/42/checks))"},
 		{"ci-failing links to checks tab", Target{PR: 88, PRURL: "https://github.com/rancher/apiserver/pull/88", State: "ci-failing"},
-			"[#88](https://github.com/rancher/apiserver/pull/88) ([ci-failing](https://github.com/rancher/apiserver/pull/88/checks))"},
+			"[#88](https://github.com/rancher/apiserver/pull/88) ([ci-failing](https://github.com/rancher/apiserver/pull/88/checks) · [checks](https://github.com/rancher/apiserver/pull/88/checks))"},
 		{"merged terminal", Target{PR: 15, PRURL: "https://x/pull/15", State: "merged"},
 			"[#15](https://x/pull/15) (merged)"},
+		{"closed terminal", Target{PR: 16, PRURL: "https://x/pull/16", State: "closed"},
+			"[#16](https://x/pull/16) (closed)"},
 		{"missing URL falls back to plain text", Target{PR: 7, State: "open"},
 			"#7 (open)"},
 	}
