@@ -56,6 +56,16 @@ func (r *Reconciler) advanceCascade(ctx context.Context, issue *ghclient.Issue) 
 		return err
 	}
 
+	// Heal any current-stage bumps left with empty dep versions — happens
+	// when a prior version of the advance logic only folded in the
+	// just-completed stage's tags, leaving cross-layer deps (e.g. a layer-1
+	// repo that's also a direct dep of the leaf in a layer-3 bump) unfilled.
+	// Idempotent on healed cascades.
+	fillBumpDepsFromPriorTags(&op, op.CurrentStage)
+	if _, err := r.openCascadeStageBumps(ctx, &op, op.CurrentStage, issue.Number, issue.URL); err != nil {
+		return err
+	}
+
 	for {
 		advanced, err := r.maybeAdvanceCascadeStage(ctx, &op, issue.Number, issue.URL)
 		if err != nil {
@@ -143,26 +153,8 @@ func (r *Reconciler) maybeAdvanceCascadeStage(ctx context.Context, op *cascade.O
 		return false, nil
 	}
 
-	// Build a {dep -> version} map from this stage's recorded tags so the
-	// next stage's bump entries can be filled. A Dep entry matches one of
-	// the prior stage's repos when the prior stage retagged that repo.
-	taggedVersion := make(map[string]string, len(stage.Tags))
-	for _, tg := range stage.Tags {
-		taggedVersion[tg.Repo] = tg.Version
-	}
 	op.CurrentStage++
-	next := &op.Stages[op.CurrentStage]
-	for i := range next.Bumps {
-		for j := range next.Bumps[i].Deps {
-			d := &next.Bumps[i].Deps[j]
-			if d.Version != "" {
-				continue // pre-filled at cascade creation (source dep or paired-latest)
-			}
-			if v, ok := taggedVersion[d.Dep]; ok {
-				d.Version = v
-			}
-		}
-	}
+	fillBumpDepsFromPriorTags(op, op.CurrentStage)
 	log.Printf("passCascade: advanced to stage %d/%d (%s %s)",
 		op.CurrentStage+1, len(op.Stages), op.LeafRepo, op.LeafBranch)
 	if _, err := r.openCascadeStageBumps(ctx, op, op.CurrentStage, issueNum, trackerURL); err != nil {
@@ -204,6 +196,40 @@ func cascadeComplete(op cascade.Op) bool {
 		return false
 	}
 	return allBumpsMerged(op.Stages[op.CurrentStage])
+}
+
+// fillBumpDepsFromPriorTags fills empty Dep.Version entries in stage `idx`
+// from the recorded tags of every stage strictly before `idx`. A leaf bump
+// (e.g. rancher in the final stage) directly depends on layer-1 repos
+// like steve, so its bundle must see steve's stage-1 tag — not just the
+// just-completed prior stage's tags.
+//
+// Idempotent: only fills entries with Version=="", so paired-latest /
+// explicit-source pre-fills are preserved.
+func fillBumpDepsFromPriorTags(op *cascade.Op, idx int) {
+	if idx <= 0 || idx >= len(op.Stages) {
+		return
+	}
+	taggedVersion := map[string]string{}
+	for i := 0; i < idx; i++ {
+		for _, tg := range op.Stages[i].Tags {
+			if tg.Tagged && tg.Version != "" {
+				taggedVersion[tg.Repo] = tg.Version
+			}
+		}
+	}
+	stage := &op.Stages[idx]
+	for i := range stage.Bumps {
+		for j := range stage.Bumps[i].Deps {
+			d := &stage.Bumps[i].Deps[j]
+			if d.Version != "" {
+				continue
+			}
+			if v, ok := taggedVersion[d.Dep]; ok {
+				d.Version = v
+			}
+		}
+	}
 }
 
 // tryClaimCascadeTag offers a just-emitted tag to every open cascade. If any
