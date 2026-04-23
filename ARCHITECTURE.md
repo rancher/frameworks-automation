@@ -282,7 +282,7 @@ sequenceDiagram
     rel->>disp: repository_dispatch<br/>tag-emitted {repo, tag, sha}
     disp->>rec: go run -mode=dispatch
     rec->>gh: list open cascades; offer tag
-    Note right of rec: tryClaimCascadeTag —<br/>cascade may absorb the tag
+    note right of rec: tryClaimCascadeTag —<br/>cascade may absorb the tag
     alt no cascade claimed
         rec->>gh: ComputeTargetsForLeafBranch
         rec->>gh: find-or-create bump-op tracker<br/>(label: dep:X version:Y leaf:Z:B)
