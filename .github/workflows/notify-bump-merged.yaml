@@ -1,0 +1,56 @@
+name: Notify automation on bump-PR merge (reusable)
+
+# Reusable workflow: called by each downstream repo's
+# notify-bump-merged.yaml when an automation/* PR is merged. Sends a
+# `bump-pr-merged` repository_dispatch to the automation repo, which
+# triggers the reconciler (cron mode) to pick up the merge within ~30s.
+#
+# Callers pass:
+#   inputs:  { repo, pr, head_branch, base_branch }
+#   secrets: { AUTOMATION_DISPATCH_TOKEN }
+#
+# AUTOMATION_REPO is hardcoded here — single source of truth. When the
+# automation repo moves, only this file needs updating.
+
+on:
+  workflow_call:
+    inputs:
+      repo:
+        description: 'owner/name of the downstream repo (github.repository from caller)'
+        type: string
+        required: true
+      pr:
+        description: 'PR number (as string)'
+        type: string
+        required: true
+      head_branch:
+        description: 'Head branch of the merged PR (e.g. automation/bump-...)'
+        type: string
+        required: true
+      base_branch:
+        description: 'Base branch of the merged PR (e.g. main)'
+        type: string
+        required: true
+    secrets:
+      AUTOMATION_DISPATCH_TOKEN:
+        description: 'PAT with repo scope on the automation repo'
+        required: true
+
+env:
+  AUTOMATION_REPO: "tomleb/frameworks-automation"
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Dispatch bump-pr-merged to automation repo
+        env:
+          GH_TOKEN: ${{ secrets.AUTOMATION_DISPATCH_TOKEN }}
+        run: |
+          gh api "repos/${AUTOMATION_REPO}/dispatches" \
+            -f event_type=bump-pr-merged \
+            -f client_payload[repo]='${{ inputs.repo }}' \
+            -f client_payload[pr]='${{ inputs.pr }}' \
+            -f client_payload[head_branch]='${{ inputs.head_branch }}' \
+            -f client_payload[base_branch]='${{ inputs.base_branch }}'
