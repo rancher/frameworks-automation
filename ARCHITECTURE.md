@@ -30,6 +30,7 @@ flowchart LR
         tag["repository_dispatch<br/>tag-emitted"]
         bumpdep["workflow_dispatch<br/>bump-&lt;dep&gt;"]
         cascadewf["workflow_dispatch<br/>cascade"]
+        bumpmerged["repository_dispatch<br/>bump-pr-merged"]
     end
 
     subgraph repo["automation repo"]
@@ -47,6 +48,7 @@ flowchart LR
     tag --> rec
     bumpdep --> rec
     cascadewf --> rec
+    bumpmerged --> rec
     rec <--> cfg
     rec <--> issues
     rec <--> gh
@@ -88,10 +90,12 @@ internal/
   dashboard/           # per-leaf-branch "in-flight" rollup issue
   reconcile/           # the four-pass loop tying everything together
 .github/workflows/
-  reconciler.yaml      # cron entry
-  tag-emitted.yaml     # dispatch entry
-  bump-wrangler.yaml   # manual per-dep entry (one per independent)
-  cascade.yaml         # manual cascade entry
+  reconciler.yaml           # cron entry
+  tag-emitted.yaml          # dispatch entry
+  bump-wrangler.yaml        # manual per-dep entry (one per independent)
+  cascade.yaml              # manual cascade entry
+  bump-pr-merged.yaml       # dispatch entry; fired by downstream repos on automation/* PR merge
+  notify-bump-merged.yaml   # reusable workflow called by each downstream repo
 dependencies.yaml      # the DAG + per-repo policy
 ```
 
@@ -449,7 +453,10 @@ Slack.
 - Re-tagging via the per-repo Release workflow stays manual at every
   cascade-mid layer (devs click `Run workflow` with the next-patch version
   pre-filled by the cascade prompt).
-- No webhook plumbing on downstream repos — PR transitions are observed by
-  polling, ceiling ~15 min on cron.
+- PR-state polling ceiling is ~15 min on cron for external repos. For
+  `automation/*` bump PRs, each downstream repo fires a `bump-pr-merged`
+  dispatch on merge, cutting pass-2 latency to ~30s. This uses a workflow-level
+  hook in each downstream repo (not a GitHub webhook — no webhook configuration
+  required).
 - Branch-cut workflow (creating new `release/vX.Y` branches and applying
   tag protection) is deferred.
