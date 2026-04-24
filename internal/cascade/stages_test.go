@@ -66,7 +66,7 @@ func TestComputeStages_LinearChain(t *testing.T) {
 		"rancher", "main",
 		rancherTable(),
 		map[string]*config.VersionTable{"steve": steveTable()},
-		nilResolver,
+		nilResolver, nil,
 	)
 	if err != nil {
 		t.Fatalf("err: %v", err)
@@ -111,7 +111,7 @@ func TestComputeStages_PairedReleaseBranch(t *testing.T) {
 		"rancher", "release/v2.13",
 		rancherTable(),
 		map[string]*config.VersionTable{"steve": steveTable()},
-		nilResolver,
+		nilResolver, nil,
 	)
 	if err != nil {
 		t.Fatalf("err: %v", err)
@@ -144,7 +144,7 @@ func TestComputeStages_DirectLeafDepOnly(t *testing.T) {
 	_, stages, err := ComputeStages(cfg,
 		map[string]string{"wrangler": "v0.5.1"},
 		"rancher", "main",
-		rancherTable(), nil, nilResolver,
+		rancherTable(), nil, nilResolver, nil,
 	)
 	if err != nil {
 		t.Fatalf("err: %v", err)
@@ -177,7 +177,7 @@ func TestComputeStages_FanInDAG(t *testing.T) {
 	_, stages, err := ComputeStages(cfg,
 		map[string]string{"D": "vNEW"},
 		"A", "main",
-		aTable, nil, nilResolver,
+		aTable, nil, nilResolver, nil,
 	)
 	if err != nil {
 		t.Fatalf("err: %v", err)
@@ -236,7 +236,7 @@ func TestComputeStages_NoExplicitPullsPairedLatest(t *testing.T) {
 		"rancher", "main",
 		rancherTable(),
 		map[string]*config.VersionTable{"steve": steveTable()},
-		resolver,
+		resolver, nil,
 	)
 	if err != nil {
 		t.Fatalf("err: %v", err)
@@ -281,7 +281,7 @@ func TestComputeStages_PairedLatestAlongsideExplicit(t *testing.T) {
 		"rancher", "main",
 		rancherTable(),
 		map[string]*config.VersionTable{"steve": steveTable(), "webhook": webhookTable},
-		resolver,
+		resolver, nil,
 	)
 	if err != nil {
 		t.Fatalf("err: %v", err)
@@ -345,7 +345,7 @@ func TestComputeStages_NoPathToLeafSkipsExplicit(t *testing.T) {
 		"rancher", "main",
 		rancherTable(),
 		map[string]*config.VersionTable{"steve": steveTbl},
-		resolver,
+		resolver, nil,
 	)
 	if err != nil {
 		t.Fatalf("err: %v", err)
@@ -377,7 +377,7 @@ func TestComputeStages_PairedMissingTable(t *testing.T) {
 	_, _, err := ComputeStages(cfg,
 		map[string]string{"wrangler": "v0.5.1"},
 		"rancher", "main",
-		rancherTable(), nil, nilResolver,
+		rancherTable(), nil, nilResolver, nil,
 	)
 	if err == nil {
 		t.Fatal("expected error when paired dependent has no VERSION.md table")
@@ -395,7 +395,7 @@ func TestComputeStages_PairedNoMatchingPair(t *testing.T) {
 		"rancher", "release/v2.13",
 		rancherTable(),
 		map[string]*config.VersionTable{"steve": steve},
-		nilResolver,
+		nilResolver, nil,
 	)
 	if err == nil {
 		t.Fatal("expected error when paired dep has no row for leaf minor")
@@ -407,7 +407,7 @@ func TestComputeStages_RejectsNonLeaf(t *testing.T) {
 	_, _, err := ComputeStages(cfg,
 		map[string]string{"wrangler": "v0.5.1"},
 		"steve", "main",
-		steveTable(), nil, nilResolver,
+		steveTable(), nil, nilResolver, nil,
 	)
 	if err == nil {
 		t.Fatal("expected error when leafRepo isn't kind=leaf")
@@ -421,7 +421,7 @@ func TestComputeStages_LeafBranchNotInTable(t *testing.T) {
 		"rancher", "release/v9.9",
 		rancherTable(),
 		map[string]*config.VersionTable{"steve": steveTable()},
-		nilResolver,
+		nilResolver, nil,
 	)
 	if err == nil {
 		t.Fatal("expected error for branch not in leaf VERSION.md")
@@ -463,7 +463,7 @@ func TestComputeStages_OrderEdgeSequencesChartBeforeRancher(t *testing.T) {
 		map[string]string{"wrangler": "v0.5.6"},
 		"rancher", "main", rancherTable(),
 		map[string]*config.VersionTable{"webhook": webhookTbl},
-		nilResolver,
+		nilResolver, nil,
 	)
 	if err != nil {
 		t.Fatalf("err: %v", err)
@@ -511,6 +511,60 @@ func TestComputeStages_OrderEdgeSequencesChartBeforeRancher(t *testing.T) {
 	}
 }
 
+func TestComputeStages_StalePairedPromotedIntoPropagation(t *testing.T) {
+	// steve is stale (unreleased commits). With no explicit independents, a
+	// normal cascade would put steve in paired-latest and emit one final stage
+	// bumping only rancher. With steve in staleRepos, it joins the propagation
+	// set: the cascade should produce a stage-1 tag prompt for steve followed
+	// by a final bump of rancher that uses steve's new tag.
+	cfg := newCfg()
+	stale := map[string]bool{"steve": true}
+	sources, stages, err := ComputeStages(cfg,
+		map[string]string{},
+		"rancher", "main",
+		rancherTable(),
+		map[string]*config.VersionTable{"steve": steveTable()},
+		nilResolver, stale,
+	)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	// steve should NOT appear as a paired-latest source — it's in propagation.
+	for _, s := range sources {
+		if s.Name == "steve" {
+			t.Errorf("steve should not be a paired-latest source when stale: %+v", sources)
+		}
+	}
+	if len(stages) != 2 {
+		t.Fatalf("want 2 stages (steve tag-only, rancher final), got %d: %+v", len(stages), stages)
+	}
+	// Stage 1: no bumps (wrangler is out-of-scope), one tag prompt for steve.
+	st1 := stages[0]
+	if len(st1.Bumps) != 0 {
+		t.Errorf("stage 1 should have no bumps (no in-scope deps): %+v", st1.Bumps)
+	}
+	if len(st1.Tags) != 1 || st1.Tags[0].Repo != "steve" {
+		t.Errorf("stage 1 should have a steve tag prompt: %+v", st1.Tags)
+	}
+	// Stage 2 (final): bump rancher with steve (version pending from tag).
+	st2 := stages[1]
+	if len(st2.Bumps) != 1 || st2.Bumps[0].Repo != "rancher" {
+		t.Fatalf("stage 2 should bump rancher: %+v", st2.Bumps)
+	}
+	found := false
+	for _, d := range st2.Bumps[0].Deps {
+		if d.Dep == "steve" {
+			found = true
+			if d.Version != "" {
+				t.Errorf("steve dep should be empty until tag arrives: %+v", d)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("rancher bundle should include steve dep: %+v", st2.Bumps[0].Deps)
+	}
+}
+
 func TestComputeStages_RejectsPairedAsExplicit(t *testing.T) {
 	cfg := newCfg()
 	_, _, err := ComputeStages(cfg,
@@ -518,7 +572,7 @@ func TestComputeStages_RejectsPairedAsExplicit(t *testing.T) {
 		"rancher", "main",
 		rancherTable(),
 		map[string]*config.VersionTable{"steve": steveTable()},
-		nilResolver,
+		nilResolver, nil,
 	)
 	if err == nil {
 		t.Fatal("expected error when a paired dep is supplied as an explicit source")

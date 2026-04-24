@@ -91,18 +91,26 @@ func (r *Reconciler) RunCascade(ctx context.Context, leafBranch string, independ
 		return r.resolveLatestForBranch(ctx, name, branch)
 	}
 
-	sources, stages, err := cascade.ComputeStages(r.cfg, independents, leafRepo, leafBranch, leafTable, pairedTables, resolver)
+	sources, stages, err := cascade.ComputeStages(r.cfg, independents, leafRepo, leafBranch, leafTable, pairedTables, resolver, nil)
 	if err != nil {
 		return fmt.Errorf("compute cascade stages: %w", err)
 	}
 
-	// Reject cascades whose paired-latest sources (or their managed paired
-	// deps) have unreleased commits. Example: norman was committed to but not
-	// tagged; webhook@v0.7.2 (paired-latest) still pins the old norman version;
-	// the cascade would silently skip the new commit unless we block here.
+	// Detect paired-latest sources (or their deps) with unreleased commits and
+	// re-run ComputeStages with those repos promoted into the propagation set.
+	// This ensures a committed-but-untagged norman gets a proper bump→tag stage
+	// instead of being silently consumed at webhook's stale paired-latest tag.
 	leafMinor := leafTable.LookupMinor(leafBranch)
-	if err := r.validatePairedLatestSources(ctx, sources, leafMinor, pairedTables); err != nil {
-		return err
+	stale, err := r.detectStalePairedRepos(ctx, sources, leafMinor, pairedTables)
+	if err != nil {
+		log.Printf("cascade: stale detection error (continuing): %v", err)
+	}
+	if len(stale) > 0 {
+		log.Printf("cascade: promoting stale paired repos into propagation: %v", sortedKeys(stale))
+		sources, stages, err = cascade.ComputeStages(r.cfg, independents, leafRepo, leafBranch, leafTable, pairedTables, resolver, stale)
+		if err != nil {
+			return fmt.Errorf("compute cascade stages (with stale repos): %w", err)
+		}
 	}
 
 	if err := r.fillTagPromptHints(ctx, stages, leafTable, pairedTables); err != nil {
@@ -535,26 +543,20 @@ func (r *Reconciler) predictNextPatch(ctx context.Context, ghRepo, minor string)
 	return fmt.Sprintf("%s.%d", minor, highest+1), nil
 }
 
-// validatePairedLatestSources blocks cascade creation when a paired-latest
-// source (or any of its managed paired deps) has unreleased commits. Without
-// this check the cascade would silently use a stale tag for a repo whose
-// branch has moved on, ignoring committed-but-untagged work.
+// detectStalePairedRepos scans paired-latest sources (and their managed paired
+// deps transitively) for unreleased commits. Any repo whose branch is ahead of
+// its latest tag is "stale" and should be promoted into the cascade's
+// propagation set so it gets a proper bump→tag stage.
 //
-// Only paired-latest sources are checked (explicit sources are user-supplied
-// and their version is already validated by assertReleaseExists). For each
-// paired source we:
-//
-//  1. Confirm the source's own branch is not ahead of its latest tag.
-//  2. Fetch go.mod at that tag and confirm every managed paired dep's branch
-//     is not ahead of the version pinned there.
-//
-// Independent deps are skipped — their release cycle is decoupled by design.
-func (r *Reconciler) validatePairedLatestSources(
+// The scan starts from each paired-latest source and follows go.mod deps one
+// level at a time. Independent deps are skipped — their release cycle is
+// separate and managed via explicit-independent cascades.
+func (r *Reconciler) detectStalePairedRepos(
 	ctx context.Context,
 	sources []cascade.Source,
 	leafMinor string,
 	pairedTables map[string]*config.VersionTable,
-) error {
+) (map[string]bool, error) {
 	moduleToRepo := map[string]string{}
 	for name, repo := range r.cfg.Repos {
 		if repo.Module != "" {
@@ -562,81 +564,87 @@ func (r *Reconciler) validatePairedLatestSources(
 		}
 	}
 
-	var errs []string
+	stale := map[string]bool{}
+	// queue maps repo name → the tag version to compare its branch against.
+	queue := map[string]string{}
 	for _, src := range sources {
-		if src.Explicit {
+		if !src.Explicit {
+			queue[src.Name] = src.Version
+		}
+	}
+
+	checked := map[string]bool{}
+	for len(queue) > 0 {
+		var name, version string
+		for n, v := range queue {
+			name, version = n, v
+			break
+		}
+		delete(queue, name)
+		if checked[name] {
 			continue
 		}
-		srcCfg, ok := r.cfg.Repos[src.Name]
+		checked[name] = true
+
+		repoCfg, ok := r.cfg.Repos[name]
 		if !ok {
 			continue
 		}
-		srcGHRepo, err := srcCfg.GitHubRepo()
+		ghRepo, err := repoCfg.GitHubRepo()
 		if err != nil {
 			continue
 		}
-		srcBranch, err := r.branchForRepo(src.Name, leafMinor, pairedTables)
-		if err != nil || srcBranch == "" {
-			log.Printf("cascade validate: %s branch lookup: %v", src.Name, err)
+		branch, err := r.branchForRepo(name, leafMinor, pairedTables)
+		if err != nil || branch == "" {
+			log.Printf("cascade stale: %s branch lookup: %v", name, err)
 			continue
 		}
 
-		// Check 1: source's own branch ahead of its paired-latest tag.
-		ahead, err := r.gh.CommitsAheadOf(ctx, srcGHRepo, src.Version, srcBranch)
+		ahead, err := r.gh.CommitsAheadOf(ctx, ghRepo, version, branch)
 		if err != nil {
-			log.Printf("cascade validate: %s ahead check: %v", src.Name, err)
-		} else if ahead > 0 {
-			errs = append(errs, fmt.Sprintf(
-				"%s: branch %s is %d commit(s) ahead of %s — please tag a new release",
-				src.Name, srcBranch, ahead, src.Version))
+			log.Printf("cascade stale: %s ahead check: %v", name, err)
+			continue
+		}
+		if ahead > 0 {
+			log.Printf("cascade: %s branch %s is %d commit(s) ahead of %s — promoting into cascade stages", name, branch, ahead, version)
+			stale[name] = true
 		}
 
-		// Check 2: managed paired deps pinned in the source's go.mod have
-		// unreleased commits on their branch.
-		gomod, err := r.gh.FetchFile(ctx, srcGHRepo, src.Version, "go.mod")
+		// Queue paired deps pinned in this repo's go.mod for staleness checks.
+		gomod, err := r.gh.FetchFile(ctx, ghRepo, version, "go.mod")
 		if err != nil {
-			log.Printf("cascade validate: fetch %s@%s go.mod: %v", src.Name, src.Version, err)
+			log.Printf("cascade stale: fetch %s@%s go.mod: %v", name, version, err)
 			continue
 		}
 		mf, err := modfile.Parse("go.mod", []byte(gomod), nil)
 		if err != nil {
-			log.Printf("cascade validate: parse %s@%s go.mod: %v", src.Name, src.Version, err)
 			continue
 		}
 		for _, req := range mf.Require {
 			depName, ok := moduleToRepo[req.Mod.Path]
-			if !ok {
+			if !ok || checked[depName] {
 				continue
 			}
 			depCfg, ok := r.cfg.Repos[depName]
 			if !ok || depCfg.Kind != config.KindPaired {
 				continue
 			}
-			depGHRepo, err := depCfg.GitHubRepo()
-			if err != nil {
-				continue
-			}
-			depBranch, err := r.branchForRepo(depName, leafMinor, pairedTables)
-			if err != nil || depBranch == "" {
-				continue
-			}
-			depAhead, err := r.gh.CommitsAheadOf(ctx, depGHRepo, req.Mod.Version, depBranch)
-			if err != nil {
-				log.Printf("cascade validate: %s dep %s ahead check: %v", src.Name, depName, err)
-				continue
-			}
-			if depAhead > 0 {
-				errs = append(errs, fmt.Sprintf(
-					"%s@%s: dep %s branch %s is %d commit(s) ahead of %s — please tag a new %s release first",
-					src.Name, src.Version, depName, depBranch, depAhead, req.Mod.Version, depName))
+			if _, queued := queue[depName]; !queued {
+				queue[depName] = req.Mod.Version
 			}
 		}
 	}
-	if len(errs) > 0 {
-		return fmt.Errorf("cascade has stale paired-latest sources; tag the affected repos first:\n  - %s",
-			strings.Join(errs, "\n  - "))
+	return stale, nil
+}
+
+// sortedKeys returns the keys of m in sorted order, for deterministic logging.
+func sortedKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
 	}
-	return nil
+	sort.Strings(out)
+	return out
 }
 
 // branchForRepo returns the branch of `repoName` that corresponds to

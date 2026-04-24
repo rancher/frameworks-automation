@@ -23,22 +23,27 @@ type LatestResolver func(repo, branch string) (string, error)
 //   - resolveLatest: callback returning the latest release tag on a paired
 //     dep's leaf-paired branch. Used when a paired dep is needed by a stage
 //     repo but isn't itself in the propagation set (no re-cut required).
+//   - staleRepos: optional set of paired repos with unreleased commits that
+//     should be promoted into the propagation set (gets bump→tag stages)
+//     instead of being consumed at their current paired-latest tag. Pass nil
+//     when no staleness detection has been done.
 //
 // Algorithm:
 //
 //  1. propagation = forward(independents) ∩ backward(leaf) ∖ independents.
 //     Repos that must be re-cut because they transitively depend on something
 //     in `independents` and feed leaf.
-//  2. stage_repos = propagation ∪ {leaf}. These get bump PRs (and non-final
+//  2. staleRepos entries that are in backward(leaf) are merged into propagation.
+//  3. stage_repos = propagation ∪ {leaf}. These get bump PRs (and non-final
 //     stages get tag prompts).
-//  3. For each stage repo, walk its direct deps:
+//  4. For each stage repo, walk its direct deps:
 //     - in independents → explicit source. Bundle entry pinned at given version.
 //     - in propagation → bundle entry empty (Version="") until upstream tag arrives.
 //     - paired and not in propagation → resolveLatest. Becomes implicit
 //     paired-latest source.
 //     - independent and not in independents → SKIP (out of scope).
-//  4. Layer assignment: sources at layer 0; iterative relaxation for stage repos.
-//  5. Stages = layers ≥ 1. Non-final stages get one TagPrompt per stage repo.
+//  5. Layer assignment: sources at layer 0; iterative relaxation for stage repos.
+//  6. Stages = layers ≥ 1. Non-final stages get one TagPrompt per stage repo.
 //
 // Returns the ordered source list (explicit + paired-latest, for body display)
 // and the planned stages.
@@ -49,6 +54,7 @@ func ComputeStages(
 	leafTable *config.VersionTable,
 	pairedTables map[string]*config.VersionTable,
 	resolveLatest LatestResolver,
+	staleRepos map[string]bool,
 ) ([]Source, []Stage, error) {
 	leaf, ok := cfg.Repos[leafRepo]
 	if !ok {
@@ -85,6 +91,14 @@ func ComputeStages(
 
 	propagation := map[string]bool{}
 	for r := range forward {
+		if backward[r] && !explicitSet[r] {
+			propagation[r] = true
+		}
+	}
+	// Stale paired repos (unreleased commits) are promoted from paired-latest
+	// into the propagation set so they receive their own bump→tag stage rather
+	// than being silently consumed at their current tag.
+	for r := range staleRepos {
 		if backward[r] && !explicitSet[r] {
 			propagation[r] = true
 		}
