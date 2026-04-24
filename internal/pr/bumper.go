@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/rancher/release-automation/internal/config"
 	ghclient "github.com/rancher/release-automation/internal/github"
 )
 
@@ -45,9 +46,12 @@ type Request struct {
 }
 
 // Module is one (Go module path, target version) pair within a Request.
+// Strategy picks the registered procedure that mutates the working tree;
+// empty defaults to go-get for parity with the legacy single-strategy world.
 type Module struct {
-	Path    string // e.g. "github.com/rancher/steve"
-	Version string // e.g. "v0.7.5"
+	Path     string          // e.g. "github.com/rancher/steve"
+	Version  string          // e.g. "v0.7.5"
+	Strategy config.Strategy // empty == config.StrategyGoGet
 }
 
 type Result struct {
@@ -57,8 +61,10 @@ type Result struct {
 	Notes string // human-readable summary for logging
 }
 
-// ErrNotAGoModule is returned when the cloned repo has no go.mod at the root.
+// ErrNotAGoModule is returned when a go-get strategy is requested but the
+// cloned repo has no go.mod at the root.
 var ErrNotAGoModule = errors.New("repo has no go.mod at root")
+
 
 // Open executes the bump end-to-end. Returns Result.NoOp when go.mod was
 // already at the requested version (no commit, no PR). Returns Result.Reuse
@@ -85,9 +91,6 @@ func (b *Bumper) Open(ctx context.Context, req Request) (*Result, error) {
 	if err := b.clone(ctx, req.Repo, req.BaseBranch, repoDir); err != nil {
 		return nil, err
 	}
-	if _, err := os.Stat(filepath.Join(repoDir, "go.mod")); err != nil {
-		return nil, fmt.Errorf("%s: %w", req.Repo, ErrNotAGoModule)
-	}
 	if err := configureIdentity(ctx, repoDir); err != nil {
 		return nil, err
 	}
@@ -95,17 +98,34 @@ func (b *Bumper) Open(ctx context.Context, req Request) (*Result, error) {
 		return nil, err
 	}
 
+	hasGoMod := fileExists(filepath.Join(repoDir, "go.mod"))
 	for _, m := range req.Modules {
-		if err := runGoGet(ctx, repoDir, m.Path, m.Version); err != nil {
+		strat := m.Strategy
+		if strat == "" {
+			strat = config.StrategyGoGet
+		}
+		if strat == config.StrategyGoGet && !hasGoMod {
+			return nil, fmt.Errorf("%s: %w", req.Repo, ErrNotAGoModule)
+		}
+		impl, err := lookupStrategy(strat)
+		if err != nil {
+			return nil, fmt.Errorf("%s %s: %w", req.Repo, m.Path, err)
+		}
+		if err := impl.Apply(ctx, repoDir, m); err != nil {
 			return nil, err
 		}
 	}
-	if err := run(ctx, repoDir, nil, "go", "mod", "tidy"); err != nil {
-		return nil, err
-	}
-	if hasVendor(repoDir) {
-		if err := run(ctx, repoDir, nil, "go", "mod", "vendor"); err != nil {
+	// Post-bundle Go housekeeping. Both gates rely on file existence so
+	// non-Go downstreams (e.g. chart repos with no go.mod) skip these
+	// transparently regardless of which strategies ran.
+	if hasGoMod {
+		if err := run(ctx, repoDir, nil, "go", "mod", "tidy"); err != nil {
 			return nil, err
+		}
+		if hasVendor(repoDir) {
+			if err := run(ctx, repoDir, nil, "go", "mod", "vendor"); err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -208,6 +228,11 @@ func runGoGet(ctx context.Context, dir, module, version string) error {
 func hasVendor(dir string) bool {
 	st, err := os.Stat(filepath.Join(dir, "vendor"))
 	return err == nil && st.IsDir()
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func hasChanges(ctx context.Context, dir string) (bool, error) {

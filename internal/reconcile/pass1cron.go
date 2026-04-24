@@ -97,7 +97,7 @@ func upstreamRepos(cfg *config.Config) []string {
 	seen := make(map[string]struct{})
 	for _, r := range cfg.Repos {
 		for _, d := range r.Deps {
-			seen[d] = struct{}{}
+			seen[d.Name] = struct{}{}
 		}
 	}
 	out := make([]string, 0, len(seen))

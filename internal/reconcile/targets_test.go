@@ -11,8 +11,8 @@ func newCfg(t *testing.T) *config.Config {
 	t.Helper()
 	return &config.Config{
 		Repos: map[string]config.Repo{
-			"rancher": {Kind: config.KindLeaf, Module: "github.com/rancher/rancher", Deps: []string{"steve", "wrangler"}},
-			"steve":   {Kind: config.KindPaired, Module: "github.com/rancher/steve", Deps: []string{"wrangler"}},
+			"rancher":  {Kind: config.KindLeaf, Module: "github.com/rancher/rancher", Deps: []config.Dep{{Name: "steve", Strategy: config.StrategyGoGet}, {Name: "wrangler", Strategy: config.StrategyGoGet}}},
+			"steve":    {Kind: config.KindPaired, Module: "github.com/rancher/steve", Deps: []config.Dep{{Name: "wrangler", Strategy: config.StrategyGoGet}}},
 			"wrangler": {Kind: config.KindIndependent, Module: "github.com/rancher/wrangler"},
 		},
 	}

@@ -24,6 +24,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/rancher/release-automation/internal/config"
 )
 
 const (
@@ -74,11 +76,14 @@ type Bump struct {
 // DepBump is one (dep, module, version) triple inside a Bump's bundle.
 // `Dep` is the config-key name of the dep being bumped (e.g. "wrangler");
 // `Module` is its Go module path; `Version` is the target tag, "" until a
-// prior stage's tag arrives.
+// prior stage's tag arrives. `Strategy` selects how the bump is applied to
+// the working tree (default go-get); persisted so a re-run that loaded the
+// state without re-reading dependencies.yaml still applies the right one.
 type DepBump struct {
-	Dep     string `yaml:"dep"`
-	Module  string `yaml:"module"`
-	Version string `yaml:"version,omitempty"`
+	Dep      string          `yaml:"dep"`
+	Module   string          `yaml:"module"`
+	Version  string          `yaml:"version,omitempty"`
+	Strategy config.Strategy `yaml:"strategy,omitempty"`
 }
 
 // TagPrompt is one tag the cascade waits on at the end of a non-final stage.

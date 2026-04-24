@@ -61,12 +61,13 @@ which one. All modes serialize on a workflow-level concurrency lock
 
 ## Reconciler modes
 
-| Mode       | Trigger                                       | Purpose                                                                  |
-| ---------- | --------------------------------------------- | ------------------------------------------------------------------------ |
-| `cron`     | `schedule` (every ~15 min)                    | Discover new releases we didn't dispatch; poll PRs; refresh dashboards.  |
-| `dispatch` | `repository_dispatch` `tag-emitted`           | Fast path for a tag we just emitted (~30s end-to-end).                   |
-| `bump-dep` | `workflow_dispatch` `bump-<dep>.yaml`         | Manual fan-out of one (dep, version) onto a chosen leaf branch.          |
-| `cascade`  | `workflow_dispatch` `cascade.yaml`            | Multi-source DAG walk to a leaf branch; prompts re-tag at each layer.    |
+| Mode              | Trigger                                       | Purpose                                                                  |
+| ----------------- | --------------------------------------------- | ------------------------------------------------------------------------ |
+| `cron`            | `schedule` (every ~15 min)                    | Discover new releases we didn't dispatch; poll PRs; refresh dashboards.  |
+| `dispatch`        | `repository_dispatch` `tag-emitted`           | Fast path for a tag we just emitted (~30s end-to-end).                   |
+| `bump-dep`        | `workflow_dispatch` `bump-<dep>.yaml`         | Manual fan-out of one (dep, version) onto a chosen leaf branch.          |
+| `cascade`         | `workflow_dispatch` `cascade.yaml`            | Multi-source DAG walk to a leaf branch; prompts re-tag at each layer.    |
+| `validate-config` | CI / local                                    | Parse + validate `dependencies.yaml`; no GitHub or Slack credentials.    |
 
 CLI flags select the mode and parameters:
 
@@ -75,6 +76,7 @@ go run ./cmd/reconciler -mode=cron
 go run ./cmd/reconciler -mode=dispatch -repo=tomleb/foo -tag=v0.7.5 -sha=...
 go run ./cmd/reconciler -mode=bump-dep -dep=wrangler -version=v0.5.6 -leaf-branch=release/v2.13
 go run ./cmd/reconciler -mode=cascade -leaf-branch=main -independents=wrangler=v0.5.6
+go run ./cmd/reconciler -mode=validate-config
 ```
 
 ## Package layout
@@ -114,11 +116,22 @@ repos:
   rancher:
     kind: leaf                                                # final consumer
     module: github.com/tomleb/frameworks-automation-rancher
-    deps: [steve, webhook, wrangler]
+    deps:
+      - {name: steve}
+      - {name: webhook, strategy: bump-webhook}
+      - {name: wrangler}
+      - {name: chart, strategy: order}                        # sequencing-only edge
+  chart:
+    kind: paired
+    module: github.com/tomleb/frameworks-automation-chart
+    branch-template: "dev-{rancher-minor}"                    # no VERSION.md
+    deps:
+      - {name: webhook, strategy: chart-bump}
   steve:
     kind: paired                                              # follows VERSION.md to a rancher minor
     module: github.com/tomleb/frameworks-automation-steve
-    deps: [wrangler]
+    deps:
+      - {name: wrangler}
   wrangler:
     kind: independent                                         # no rancher pairing
     module: github.com/tomleb/frameworks-automation-wrangler
@@ -126,8 +139,37 @@ repos:
 ```
 
 - **leaf** — final consumer (rancher). Receives bump PRs; never bumped into anything else.
-- **paired** — auto-PR onto the branch whose VERSION.md row matches the upstream's minor.
+- **paired** — auto-PR onto the branch whose VERSION.md row matches the upstream's minor, OR (when `branch-template` is set) onto the template-resolved branch.
 - **independent** — auto-PR on `main` only. `release/*` branches require the manual `bump-<dep>` workflow.
+
+Per-dep `strategy:` selects which procedure mutates the working tree. Defaults
+to `go-get` if omitted. Strategies in the registry today:
+
+- `go-get` (default) — `go get module@version`.
+- `chart-bump` — runs the embedded `chart-bump.sh` against the chart clone.
+  No `go.mod` required.
+- `bump-webhook` — runs the embedded `bump-webhook.sh` against the rancher
+  clone.
+
+Script-based strategies don't depend on the downstream having the script
+pre-installed: `internal/scripts/` ships the script bodies as `//go:embed`
+strings and the bumper materializes each to a temp file at exec time. To
+add a new script-based strategy, drop the `.sh` in `internal/scripts/`,
+expose it in `scripts.go`, and register a `scriptStrategy` entry in
+`internal/pr/strategy.go`.
+- `order` — sequencing-only edge: the downstream waits on this dep's bumps to
+  merge before its own stage opens, but no in-tree action is taken. Drives
+  the cascade DAG; ignored by the bump-op auto-dispatch path.
+
+Strategies must be **idempotent** — running one twice on a tree already at the
+target version must produce no diff. The bumper relies on `git status` after
+all strategies in a bundle have run to detect the no-op case.
+
+`branch-template:` (paired-only) replaces the VERSION.md branch lookup. The
+only recognized placeholder is `{rancher-minor}`, filled from the leaf rancher
+branch's own VERSION.md row (e.g. `main → v2.16`). Note: the placeholder
+expands to the value with the `v` prefix, so `dev-{rancher-minor}` →
+`dev-v2.16`, not `dev-v{rancher-minor}`.
 
 ### `VERSION.md` (in each managed repo)
 
@@ -316,8 +358,17 @@ its open bump PRs are closed too.
 
 `ComputeStages` walks `forward(independents) ∩ backward(leaf) ∖ independents`
 to get the propagation set, adds the leaf, and assigns layers via
-iterative relaxation. Each non-final stage is `bump → tag`; the final
-stage is `bump (final)` (no re-tag of the leaf).
+iterative relaxation. The walk follows every dep edge regardless of strategy
+— `order` edges shape the layering even though they produce no in-tree bump.
+
+Stages are usually `bump → tag`, but a stage can be **bump-only** when
+nothing in a later stage needs that repo's tag. Concretely: a tag prompt
+exists for repo R at non-final stage N only if some later-stage repo has a
+non-`order` edge to R. The chart, for example, is consumed by rancher only
+via `order`, so chart's stage opens its bump but never waits on a tag — it
+advances as soon as the bump merges.
+
+The final stage is `bump (final)` (no re-tag of the leaf).
 
 Sample DAG: `wrangler → norman → webhook → rancher` and `wrangler → steve → rancher`.
 A cascade onto `rancher main` triggered by `wrangler=v0.5.6`:
@@ -447,6 +498,14 @@ Slack.
 - **New leaf**: extend `cfg.LeafRepos()`. The dashboard loop is already
   written for N leaves; pass 1 cron currently assumes a single rancher
   leaf and will need a tweak.
+- **New bump strategy**: add a `config.Strategy` constant + register an
+  implementation of `pr.Strategy` in `internal/pr/strategy.go`'s
+  `strategies` map, then validate it via `config.knownStrategy`. Strategies
+  can be `shellStrategy{argv: ...}` for fixed-command bumps or a custom
+  type for richer logic — only requirement is idempotence.
+- **Sequencing-only edge**: list the upstream in the downstream's `deps:`
+  with `strategy: order`. The cascade DAG sees the edge (so layering and
+  staging respect it); the bumper and bump-op fan-out skip it.
 
 ## Out of scope today
 

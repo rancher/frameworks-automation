@@ -6,6 +6,8 @@
 #   paired      - follows VERSION.md mapping to a rancher minor. Bump PRs go
 #                 to the branch whose VERSION.md row matches the upstream
 #                 minor (e.g. steve release/v0.7 ↔ rancher release/v2.13).
+#                 May instead use `branch-template` for repos without a
+#                 VERSION.md (see chart below).
 #   independent - no rancher pairing. Bump PRs auto-open on `main` only;
 #                 release/* branches get Slack-only notice and require the
 #                 per-repo `Bump dep` workflow for older-branch bumps.
@@ -13,8 +15,21 @@
 # module: the Go module path. Used by `go get module@version` in bump PRs and
 # to grep `go.mod` in downstreams.
 #
-# deps: upstream repos this repo depends on. Drives the reconciler's "new
-# release of X means open PRs in Y" logic.
+# branch-template: for paired repos whose branches follow a fixed naming
+# scheme rather than a VERSION.md table. Only `{rancher-minor}` is
+# recognized; it expands to the leaf rancher branch's minor (which already
+# carries the "v" prefix, e.g. "v2.16"). For "dev-v2.16" branches, write
+# `dev-{rancher-minor}` — not `dev-v{rancher-minor}`.
+#
+# deps: upstream repos this repo depends on. Each entry is `{name, strategy}`
+# where strategy defaults to `go-get` if omitted. Strategies:
+#   go-get        - default; runs `go get module@version`.
+#   chart-bump    - runs `make upgrade <version>` (no go.mod needed).
+#   bump-webhook  - runs the rancher-side webhook bump script.
+#   order         - sequencing-only edge: the downstream waits on this dep's
+#                   bumps to merge before opening its own stage, but no
+#                   in-tree action is taken. Drives the cascade DAG; ignored
+#                   by the bump-op auto-dispatch path.
 #
 # Playground configuration: points at the tomleb/frameworks-automation-*
 # scratch repos. Swap for the real rancher/* modules once the loop is proven.
@@ -24,24 +39,31 @@ repos:
     kind: leaf
     module: github.com/tomleb/frameworks-automation-rancher
     deps:
-      - steve
-      - webhook
-      - wrangler
+      - {name: steve}
+      - {name: webhook, strategy: bump-webhook}
+      - {name: wrangler}
+      - {name: chart, strategy: order}
+  chart:
+    kind: paired
+    module: github.com/tomleb/frameworks-automation-chart
+    branch-template: "dev-{rancher-minor}"
+    deps:
+      - {name: webhook, strategy: chart-bump}
   steve:
     kind: paired
     module: github.com/tomleb/frameworks-automation-steve
     deps:
-      - wrangler
+      - {name: wrangler}
   webhook:
     kind: paired
     module: github.com/tomleb/frameworks-automation-webhook
     deps:
-      - norman
+      - {name: norman}
   norman:
     kind: paired
     module: github.com/tomleb/frameworks-automation-norman
     deps:
-      - wrangler
+      - {name: wrangler}
   wrangler:
     kind: independent
     module: github.com/tomleb/frameworks-automation-wrangler

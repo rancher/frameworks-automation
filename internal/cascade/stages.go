@@ -95,23 +95,23 @@ func ComputeStages(
 	}
 
 	branchOf := func(repo string) (string, error) {
+		rcfg := cfg.Repos[repo]
 		switch {
 		case repo == leafRepo:
 			return leafBranch, nil
-		case cfg.Repos[repo].Kind == config.KindPaired:
-			tbl, ok := pairedTables[repo]
-			if !ok || tbl == nil {
-				return "", fmt.Errorf("paired repo %q: missing VERSION.md table", repo)
+		case rcfg.Kind == config.KindPaired:
+			br, err := rcfg.ResolveBranch(leafMinor, pairedTables[repo])
+			if err != nil {
+				return "", fmt.Errorf("paired repo %q: %w", repo, err)
 			}
-			br := tbl.BranchForPair(leafMinor)
 			if br == "" {
 				return "", fmt.Errorf("paired repo %q: no branch pairs to leaf minor %q", repo, leafMinor)
 			}
 			return br, nil
-		case cfg.Repos[repo].Kind == config.KindIndependent:
+		case rcfg.Kind == config.KindIndependent:
 			return "main", nil
 		}
-		return "", fmt.Errorf("repo %q has unsupported kind %q", repo, cfg.Repos[repo].Kind)
+		return "", fmt.Errorf("repo %q has unsupported kind %q", repo, rcfg.Kind)
 	}
 
 	// Walk every stage repo's direct deps once. This both shapes the bundles
@@ -142,31 +142,39 @@ func ComputeStages(
 
 	type stageDep struct {
 		Dep, Module, Version string
+		Strategy             config.Strategy
 	}
 	bundleByRepo := map[string][]stageDep{}
 	for repo := range stageRepos {
-		deps := append([]string(nil), cfg.Repos[repo].Deps...)
-		sort.Strings(deps)
+		deps := append([]config.Dep(nil), cfg.Repos[repo].Deps...)
+		sort.Slice(deps, func(i, j int) bool { return deps[i].Name < deps[j].Name })
 		for _, d := range deps {
-			depCfg, ok := cfg.Repos[d]
+			depCfg, ok := cfg.Repos[d.Name]
 			if !ok {
 				continue
 			}
+			// Order edges sequence the DAG (chart blocks rancher) but produce
+			// no in-tree action. Drop them from the bundle here so the bumper
+			// never sees them, while the layer assignment below still folds
+			// them into the topological sort.
+			if d.Strategy == config.StrategyOrder {
+				continue
+			}
 			switch {
-			case explicitSet[d]:
+			case explicitSet[d.Name]:
 				bundleByRepo[repo] = append(bundleByRepo[repo], stageDep{
-					Dep: d, Module: depCfg.Module, Version: independents[d],
+					Dep: d.Name, Module: depCfg.Module, Version: independents[d.Name], Strategy: d.Strategy,
 				})
-			case propagation[d]:
+			case propagation[d.Name]:
 				bundleByRepo[repo] = append(bundleByRepo[repo], stageDep{
-					Dep: d, Module: depCfg.Module,
+					Dep: d.Name, Module: depCfg.Module, Strategy: d.Strategy,
 				})
 			case depCfg.Kind == config.KindPaired:
-				if err := addPairedLatest(d); err != nil {
+				if err := addPairedLatest(d.Name); err != nil {
 					return nil, nil, err
 				}
 				bundleByRepo[repo] = append(bundleByRepo[repo], stageDep{
-					Dep: d, Module: depCfg.Module, Version: pairedLatest[d],
+					Dep: d.Name, Module: depCfg.Module, Version: pairedLatest[d.Name], Strategy: d.Strategy,
 				})
 			default:
 				// Independent not in user input → out of scope. Skip.
@@ -203,6 +211,21 @@ func ComputeStages(
 	}
 	sort.Ints(layerNums)
 
+	// needsTag captures which repos any later stage will consume via a
+	// version-bearing edge (anything that isn't `order`). A repo not in this
+	// set gets no tag prompt — chart, for instance, is sequenced before
+	// rancher via an order edge but isn't go-get'd into anything, so the
+	// cascade has no tag to wait on for it. Stage-only repos (in stageRepos
+	// but consumed only via order) become bump-only.
+	needsTag := map[string]bool{}
+	for repo := range stageRepos {
+		for _, d := range cfg.Repos[repo].Deps {
+			if d.Strategy != config.StrategyOrder {
+				needsTag[d.Name] = true
+			}
+		}
+	}
+
 	stages := make([]Stage, 0, len(layerNums))
 	for idx, layer := range layerNums {
 		repos := byLayer[layer]
@@ -216,7 +239,7 @@ func ComputeStages(
 			sort.Slice(entries, func(i, j int) bool { return entries[i].Dep < entries[j].Dep })
 			bundle := make([]DepBump, len(entries))
 			for i, e := range entries {
-				bundle[i] = DepBump{Dep: e.Dep, Module: e.Module, Version: e.Version}
+				bundle[i] = DepBump{Dep: e.Dep, Module: e.Module, Version: e.Version, Strategy: e.Strategy}
 			}
 			br, err := branchOf(repo)
 			if err != nil {
@@ -228,7 +251,7 @@ func ComputeStages(
 		isFinal := idx == len(layerNums)-1
 		if !isFinal {
 			for _, repo := range repos {
-				if len(bundleByRepo[repo]) == 0 {
+				if !needsTag[repo] {
 					continue
 				}
 				br, err := branchOf(repo)
@@ -263,9 +286,9 @@ func backwardClosure(cfg *config.Config, root string) map[string]bool {
 		cur := queue[0]
 		queue = queue[1:]
 		for _, d := range cfg.Repos[cur].Deps {
-			if !out[d] {
-				out[d] = true
-				queue = append(queue, d)
+			if !out[d.Name] {
+				out[d.Name] = true
+				queue = append(queue, d.Name)
 			}
 		}
 	}
@@ -314,10 +337,10 @@ func assignLayers(cfg *config.Config, sources, stageRepos map[string]bool) map[s
 			best := -1
 			ready := true
 			for _, d := range cfg.Repos[r].Deps {
-				if !inScope(d) {
+				if !inScope(d.Name) {
 					continue
 				}
-				dl, ok := layers[d]
+				dl, ok := layers[d.Name]
 				if !ok {
 					ready = false
 					break

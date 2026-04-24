@@ -75,6 +75,11 @@ func (r *Reconciler) RunCascade(ctx context.Context, leafBranch string, independ
 		if repo.Kind != config.KindPaired {
 			continue
 		}
+		// Branch-template paired repos resolve their branch from the leaf
+		// rancher minor — no VERSION.md fetch required.
+		if repo.BranchTemplate != "" {
+			continue
+		}
 		tbl, err := r.fetchVersionTable(ctx, name)
 		if err != nil {
 			return fmt.Errorf("load %s VERSION.md: %w", name, err)
@@ -225,6 +230,19 @@ func (r *Reconciler) openCascadeStageBumps(ctx context.Context, op *cascade.Op, 
 // TagPrompt's Version+Tagged and returns the claimed tag; returns "" when
 // no satisfying tag was found.
 func (r *Reconciler) maybeClaimExistingTag(ctx context.Context, op *cascade.Op, stage int, bp *cascade.Bump) (string, error) {
+	// No tag prompt for this bump → nothing to claim. Skip the VERSION.md
+	// fetch and tag scan entirely (chart, for instance, has bump-only
+	// stages and no VERSION.md to read).
+	hasPrompt := false
+	for _, tg := range op.Stages[stage].Tags {
+		if tg.Repo == bp.Repo && tg.Branch == bp.Branch {
+			hasPrompt = true
+			break
+		}
+	}
+	if !hasPrompt {
+		return "", nil
+	}
 	tag, err := r.findExistingTagForBump(ctx, bp)
 	if err != nil {
 		return "", err
@@ -331,7 +349,7 @@ func bumpReady(bp *cascade.Bump) bool {
 func bumpModules(bp *cascade.Bump) []pr.Module {
 	out := make([]pr.Module, len(bp.Deps))
 	for i, d := range bp.Deps {
-		out[i] = pr.Module{Path: d.Module, Version: d.Version}
+		out[i] = pr.Module{Path: d.Module, Version: d.Version, Strategy: d.Strategy}
 	}
 	return out
 }

@@ -47,7 +47,13 @@ func (r *Reconciler) runBump(ctx context.Context, dep, version, leafBranch strin
 	}
 	dependentTables := make(map[string]*config.VersionTable)
 	for _, d := range r.cfg.Dependents(dep) {
-		if d == leafRepo || r.cfg.Repos[d].Kind != config.KindPaired {
+		dCfg := r.cfg.Repos[d]
+		if d == leafRepo || dCfg.Kind != config.KindPaired {
+			continue
+		}
+		// Branch-template paired repos (e.g. chart with dev-v{rancher-minor})
+		// don't ship a VERSION.md — branch resolution is template-driven.
+		if dCfg.BranchTemplate != "" {
 			continue
 		}
 		tbl, err := r.fetchVersionTable(ctx, d)
@@ -124,7 +130,7 @@ func (r *Reconciler) bumpTarget(ctx context.Context, dep, version, leafBranch, d
 		Repo:       downstreamGH,
 		BaseBranch: target.Branch,
 		HeadBranch: bumpBranchName(dep, version, leafBranch),
-		Modules:    []pr.Module{{Path: depModule, Version: version}},
+		Modules:    []pr.Module{{Path: depModule, Version: version, Strategy: downstream.DepStrategy(dep)}},
 		TrackerURL: trackerURL,
 	}
 	log.Printf("bump: opening %s@%s -> %s base=%s head=%s", depModule, version, req.Repo, req.BaseBranch, req.HeadBranch)

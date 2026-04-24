@@ -16,6 +16,11 @@
 //	                intermediate layer. Independent dep versions come in
 //	                via -independents=name=ver,name=ver; paired deps are
 //	                always picked up at their paired-branch latest tag.
+//	-mode=validate-config
+//	                Parse and validate dependencies.yaml; exit 0 on success,
+//	                non-zero with the error otherwise. Used by CI to guard
+//	                edits to the config. Talks to nothing external — no env
+//	                vars or GitHub credentials required.
 package main
 
 import (
@@ -32,7 +37,7 @@ import (
 
 func main() {
 	var (
-		mode         = flag.String("mode", "cron", "cron|dispatch|bump-dep|cascade")
+		mode         = flag.String("mode", "cron", "cron|dispatch|bump-dep|cascade|validate-config")
 		configPath   = flag.String("config", "dependencies.yaml", "path to dependencies.yaml")
 		repo         = flag.String("repo", "", "dispatch mode: owner/name of repo that emitted the tag")
 		tag          = flag.String("tag", "", "dispatch mode: tag that was emitted (e.g. v0.7.5)")
@@ -47,6 +52,13 @@ func main() {
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		log.Fatalf("load config: %v", err)
+	}
+
+	// validate-config exits before reaching envSettings() so it can run
+	// in CI without any secrets configured. Load already did the work.
+	if *mode == "validate-config" {
+		fmt.Printf("config OK: %d repos\n", len(cfg.Repos))
+		return
 	}
 
 	r, err := reconcile.New(cfg, envSettings())

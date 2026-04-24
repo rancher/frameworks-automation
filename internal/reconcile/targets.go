@@ -56,18 +56,25 @@ func ComputeTargetsForLeafBranch(
 	dependents := cfg.Dependents(dep)
 	out := make([]Target, 0, len(dependents))
 	for _, d := range dependents {
+		// Order edges sequence the cascade DAG; they don't trigger a bump-PR
+		// on their own when a new release of `dep` lands. Skip silently —
+		// the cascade is what drives ordering-only edges.
+		if cfg.Repos[d].DepStrategy(dep) == config.StrategyOrder {
+			continue
+		}
 		if d == leafRepo {
 			out = append(out, Target{Repo: d, Branch: leafBranch})
 			continue
 		}
 		switch cfg.Repos[d].Kind {
 		case config.KindPaired:
-			tbl, ok := dependentTables[d]
-			if !ok || tbl == nil {
-				return nil, fmt.Errorf("paired dependent %q: missing VERSION.md table", d)
+			branch, err := cfg.Repos[d].ResolveBranch(leafMinor, dependentTables[d])
+			if err != nil {
+				return nil, fmt.Errorf("paired dependent %q: %w", d, err)
 			}
-			branch := tbl.BranchForPair(leafMinor)
 			if branch == "" {
+				// No row pairs this dep's branch to the leaf minor — the
+				// dependent doesn't ship against this leaf line yet. Skip.
 				continue
 			}
 			out = append(out, Target{Repo: d, Branch: branch})
