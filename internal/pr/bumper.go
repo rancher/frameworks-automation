@@ -117,16 +117,22 @@ func (b *Bumper) Open(ctx context.Context, req Request) (*Result, error) {
 			return nil, err
 		}
 	}
-	// Post-bundle Go housekeeping. Both gates rely on file existence so
-	// non-Go downstreams (e.g. chart repos with no go.mod) skip these
-	// transparently regardless of which strategies ran.
+	// Post-bundle Go housekeeping. The hasGoMod gate skips non-Go repos
+	// (e.g. chart repos); within Go repos every go.mod found under repoDir
+	// (vendor/ excluded) is tidied and vendored so sub-modules stay consistent.
 	if hasGoMod {
-		if err := run(ctx, repoDir, nil, "go", "mod", "tidy"); err != nil {
-			return nil, err
+		dirs, err := findGoModDirs(repoDir)
+		if err != nil {
+			return nil, fmt.Errorf("find go.mod files for tidy: %w", err)
 		}
-		if hasVendor(repoDir) {
-			if err := run(ctx, repoDir, nil, "go", "mod", "vendor"); err != nil {
+		for _, dir := range dirs {
+			if err := run(ctx, dir, nil, "go", "mod", "tidy"); err != nil {
 				return nil, err
+			}
+			if hasVendor(dir) {
+				if err := run(ctx, dir, nil, "go", "mod", "vendor"); err != nil {
+					return nil, err
+				}
 			}
 		}
 	}

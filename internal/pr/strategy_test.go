@@ -55,3 +55,65 @@ func TestScriptStrategy_EmptyBodyErrors(t *testing.T) {
 		t.Fatal("expected error for empty body")
 	}
 }
+
+func TestFindGoModDirs(t *testing.T) {
+	root := t.TempDir()
+
+	write := func(rel string, content string) {
+		t.Helper()
+		full := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	write("go.mod", "module root\ngo 1.21\n")
+	write("subpkg/go.mod", "module sub\ngo 1.21\n")
+	// vendor/ must be skipped entirely
+	write("vendor/github.com/foo/go.mod", "module vendored\ngo 1.21\n")
+
+	dirs, err := findGoModDirs(root)
+	if err != nil {
+		t.Fatalf("findGoModDirs: %v", err)
+	}
+	if len(dirs) != 2 {
+		t.Errorf("want 2 dirs (root + subpkg), got %d: %v", len(dirs), dirs)
+	}
+}
+
+func TestGoModContains(t *testing.T) {
+	dir := t.TempDir()
+	gomod := filepath.Join(dir, "go.mod")
+	content := "module root\ngo 1.21\nrequire github.com/rancher/steve v0.7.4\n"
+	if err := os.WriteFile(gomod, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	has, err := goModContains(gomod, "github.com/rancher/steve")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !has {
+		t.Error("want true for present module")
+	}
+
+	// longer module name sharing a prefix must not match
+	has, err = goModContains(gomod, "github.com/rancher/steve-extra")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if has {
+		t.Error("want false for module with same prefix but different name")
+	}
+
+	has, err = goModContains(gomod, "github.com/rancher/other")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if has {
+		t.Error("want false for absent module")
+	}
+}
