@@ -192,8 +192,8 @@ func TestRender_MermaidDiagram(t *testing.T) {
 	if !strings.Contains(body, "'fontSize': '12px'") || !strings.Contains(body, "'nodeSpacing': 15") {
 		t.Errorf("missing fontSize/nodeSpacing init config in body:\n%s", body)
 	}
-	if !strings.Contains(body, "flowchart BT") {
-		t.Errorf("missing 'flowchart BT' in body:\n%s", body)
+	if !strings.Contains(body, "flowchart TD") {
+		t.Errorf("missing 'flowchart TD' in body:\n%s", body)
 	}
 
 	// Merged bump is :::done; unmerged bump is :::pending.
