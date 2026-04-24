@@ -141,20 +141,37 @@ func (c *Client) listIssues(ctx context.Context, repo string, labels []string, s
 	return out, nil
 }
 
-func (c *Client) CreateIssue(ctx context.Context, repo, title, body string, labels []string) (*Issue, error) {
+func (c *Client) CreateIssue(ctx context.Context, repo, title, body string, labels []string, assignees []string) (*Issue, error) {
 	owner, name, err := splitRepo(repo)
 	if err != nil {
 		return nil, err
 	}
 	issue, _, err := c.gh.Issues.Create(ctx, owner, name, &gh.IssueRequest{
-		Title:  &title,
-		Body:   &body,
-		Labels: &labels,
+		Title:     &title,
+		Body:      &body,
+		Labels:    &labels,
+		Assignees: &assignees,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create issue in %s: %w", repo, err)
 	}
 	return toIssue(issue), nil
+}
+
+// AddPRAssignees adds assignees to an existing PR. The GitHub API for PR
+// creation does not support assignees; use the Issues API after creation.
+func (c *Client) AddPRAssignees(ctx context.Context, repo string, number int, assignees []string) error {
+	if len(assignees) == 0 {
+		return nil
+	}
+	owner, name, err := splitRepo(repo)
+	if err != nil {
+		return err
+	}
+	if _, _, err := c.gh.Issues.AddAssignees(ctx, owner, name, number, assignees); err != nil {
+		return fmt.Errorf("add assignees to %s#%d: %w", repo, number, err)
+	}
+	return nil
 }
 
 func (c *Client) UpdateIssueBody(ctx context.Context, repo string, number int, body string) error {

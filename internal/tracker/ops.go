@@ -51,7 +51,7 @@ func FindOrCreate(ctx context.Context, gh *ghclient.Client, automationRepo strin
 	if err != nil {
 		return nil, err
 	}
-	created, err := gh.CreateIssue(ctx, automationRepo, Title(op.Dep, op.Version, op.LeafRepo, op.LeafBranch), body, labels)
+	created, err := gh.CreateIssue(ctx, automationRepo, Title(op.Dep, op.Version, op.LeafRepo, op.LeafBranch), body, labels, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create tracker for %s %s on %s %s: %w", op.Dep, op.Version, op.LeafRepo, op.LeafBranch, err)
 	}

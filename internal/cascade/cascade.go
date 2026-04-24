@@ -123,12 +123,14 @@ type Op struct {
 	Sources      []Source
 	Stages       []Stage
 	CurrentStage int
+	TriggeredBy  string // GitHub login of the user who triggered the cascade; empty when unknown
 }
 
 // Persistent is what survives between reconciler runs (lives in the metadata
 // block). Additive only — older runs must read newer files.
 type Persistent struct {
 	SlackThreadTS string   `yaml:"slack_thread_ts,omitempty"`
+	TriggeredBy   string   `yaml:"triggered_by,omitempty"`
 	Sources       []Source `yaml:"sources,omitempty"`
 	Stages        []Stage  `yaml:"stages"`
 	CurrentStage  int      `yaml:"current_stage"`
@@ -190,7 +192,11 @@ func SameExplicitSources(a, b []Source) bool {
 // Idempotent (same Op + same time → same body).
 func Render(op Op, now time.Time) (string, error) {
 	var b strings.Builder
-	fmt.Fprintf(&b, "## Cascade\n%s %s\n\n", op.LeafRepo, op.LeafBranch)
+	fmt.Fprintf(&b, "## Cascade\n%s %s\n", op.LeafRepo, op.LeafBranch)
+	if op.TriggeredBy != "" {
+		fmt.Fprintf(&b, "Triggered by @%s\n", op.TriggeredBy)
+	}
+	b.WriteString("\n")
 
 	if len(op.Sources) > 0 {
 		b.WriteString("## Sources\n")
@@ -241,6 +247,7 @@ func Render(op Op, now time.Time) (string, error) {
 		op.CurrentStage+1, len(op.Stages), now.UTC().Format(time.RFC3339))
 
 	body, err := EmbedState(b.String(), Persistent{
+		TriggeredBy:  op.TriggeredBy,
 		Sources:      op.Sources,
 		Stages:       op.Stages,
 		CurrentStage: op.CurrentStage,

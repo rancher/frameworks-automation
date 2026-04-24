@@ -43,6 +43,8 @@ type Request struct {
 	Modules    []Module // one or more (path, version) pairs to bump
 	// TrackerURL is included in the PR body so reviewers can find the op.
 	TrackerURL string
+	// Assignees lists GitHub logins to assign to the opened PR.
+	Assignees []string
 }
 
 // Module is one (Go module path, target version) pair within a Request.
@@ -157,6 +159,11 @@ func (b *Bumper) Open(ctx context.Context, req Request) (*Result, error) {
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create PR %s %s -> %s: %w", req.Repo, req.HeadBranch, req.BaseBranch, err)
+	}
+	if len(req.Assignees) > 0 {
+		if err := b.gh.AddPRAssignees(ctx, req.Repo, pr.Number, req.Assignees); err != nil {
+			return nil, fmt.Errorf("assign PR %s#%d: %w", req.Repo, pr.Number, err)
+		}
 	}
 	return &Result{PR: pr, Notes: fmt.Sprintf("opened PR #%d", pr.Number)}, nil
 }

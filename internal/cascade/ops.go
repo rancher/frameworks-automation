@@ -38,6 +38,7 @@ func FindOrCreate(
 	automationRepo string,
 	op *Op,
 	supersede SupersedeFunc,
+	actor string,
 ) (*Issue, error) {
 	labels := Labels(op.LeafRepo, op.LeafBranch)
 	candidates, err := gh.ListOpenIssues(ctx, automationRepo, labels)
@@ -70,11 +71,18 @@ func FindOrCreate(
 		}
 	}
 
+	if actor != "" {
+		op.TriggeredBy = actor
+	}
 	body, err := renderForCreate(*op)
 	if err != nil {
 		return nil, err
 	}
-	created, err := gh.CreateIssue(ctx, automationRepo, Title(op.LeafRepo, op.LeafBranch), body, labels)
+	var assignees []string
+	if actor != "" {
+		assignees = []string{actor}
+	}
+	created, err := gh.CreateIssue(ctx, automationRepo, Title(op.LeafRepo, op.LeafBranch), body, labels, assignees)
 	if err != nil {
 		return nil, fmt.Errorf("create cascade for %s %s: %w", op.LeafRepo, op.LeafBranch, err)
 	}
@@ -102,6 +110,9 @@ func UpdateBody(ctx context.Context, gh *ghclient.Client, automationRepo string,
 // creation time, even if a newer release has dropped since.
 func mergeState(op *Op, st Persistent) {
 	op.CurrentStage = st.CurrentStage
+	if op.TriggeredBy == "" {
+		op.TriggeredBy = st.TriggeredBy
+	}
 
 	if len(st.Sources) > 0 {
 		storedSources := make(map[string]Source, len(st.Sources))

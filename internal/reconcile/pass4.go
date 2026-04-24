@@ -62,7 +62,7 @@ func (r *Reconciler) writeDashboard(ctx context.Context, leaf, branch string, it
 	if len(existing) > 0 {
 		return r.gh.UpdateIssueBody(ctx, r.settings.AutomationRepo, existing[0].Number, body)
 	}
-	_, err = r.gh.CreateIssue(ctx, r.settings.AutomationRepo, dashboard.Title(leaf, branch), body, labels)
+	_, err = r.gh.CreateIssue(ctx, r.settings.AutomationRepo, dashboard.Title(leaf, branch), body, labels, nil)
 	return err
 }
 

@@ -125,7 +125,7 @@ func (r *Reconciler) RunCascade(ctx context.Context, leafBranch string, independ
 		Stages:     stages,
 	}
 
-	issue, err := cascade.FindOrCreate(ctx, r.gh, r.settings.AutomationRepo, &op, r.supersedeCascade)
+	issue, err := cascade.FindOrCreate(ctx, r.gh, r.settings.AutomationRepo, &op, r.supersedeCascade, r.settings.GitHubActor)
 	if err != nil {
 		return err
 	}
@@ -210,6 +210,7 @@ func (r *Reconciler) openCascadeStageBumps(ctx context.Context, op *cascade.Op, 
 			HeadBranch: cascadeBumpBranchName(issueNum, bp.Repo, bp.Branch),
 			Modules:    bumpModules(bp),
 			TrackerURL: trackerURL,
+			Assignees:  actorAssignees(op.TriggeredBy),
 		}
 		log.Printf("cascade: opening stage %d %s %s -> %s base=%s head=%s",
 			op.Stages[stage].Layer, bp.Repo, bp.Branch, req.Repo, req.BaseBranch, req.HeadBranch)
@@ -665,6 +666,15 @@ func (r *Reconciler) branchForRepo(repoName, leafMinor string, pairedTables map[
 		return br, nil
 	}
 	return "", fmt.Errorf("repo %q: unsupported kind %q", repoName, repoCfg.Kind)
+}
+
+// actorAssignees returns a single-element slice for the given actor, or nil
+// when actor is empty (cron runs have no actor).
+func actorAssignees(actor string) []string {
+	if actor == "" {
+		return nil
+	}
+	return []string{actor}
 }
 
 // cascadeBumpBranchName is the canonical head-branch name for a cascade bump

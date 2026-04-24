@@ -51,6 +51,7 @@ func (r *Reconciler) advanceCascade(ctx context.Context, issue *ghclient.Issue) 
 		Sources:      st.Sources,
 		Stages:       st.Stages,
 		CurrentStage: st.CurrentStage,
+		TriggeredBy:  st.TriggeredBy,
 	}
 
 	if _, err := r.pollCascadeBumps(ctx, &op); err != nil {
@@ -285,6 +286,7 @@ func (r *Reconciler) tryClaimCascadeTag(ctx context.Context, dep, version string
 			Sources:      st.Sources,
 			Stages:       st.Stages,
 			CurrentStage: st.CurrentStage,
+			TriggeredBy:  st.TriggeredBy,
 		}
 		if err := cascade.UpdateBody(ctx, r.gh, r.settings.AutomationRepo, issue.Number, op); err != nil {
 			return false, fmt.Errorf("update cascade #%d after claim: %w", issue.Number, err)

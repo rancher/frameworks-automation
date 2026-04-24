@@ -62,6 +62,7 @@ jobs:
           SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
           RANCHER_BRANCH: ${{ inputs.rancher_branch }}
           WRANGLER: ${{ inputs.wrangler }}
+          GITHUB_ACTOR: ${{ github.actor }}
         run: |
           INDEPS=""
           append() {

@@ -24,6 +24,7 @@ import (
 type Settings struct {
 	AutomationRepo string // owner/name where tracker issues live
 	GitHubToken    string
+	GitHubActor    string // login of the user who triggered the workflow; empty for cron
 	// Slack settings are optional during pilot 1.
 	SlackToken   string
 	SlackChannel string
