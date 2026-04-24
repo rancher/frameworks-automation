@@ -266,7 +266,7 @@ func Render(op Op, now time.Time) (string, error) {
 
 func renderMermaid(op Op) string {
 	var b strings.Builder
-	b.WriteString("%%{init: {'themeVariables': {'fontSize': '9px'}, 'flowchart': {'padding': 4, 'nodeSpacing': 15, 'rankSpacing': 15}}}%%\nflowchart BT\n")
+	b.WriteString("%%{init: {'themeVariables': {'fontSize': '12px'}, 'flowchart': {'padding': 4, 'nodeSpacing': 15, 'rankSpacing': 15}}}%%\nflowchart BT\n")
 	b.WriteString("    classDef done fill:#86efac,stroke:#16a34a,color:#000\n")
 	b.WriteString("    classDef current fill:#bfdbfe,stroke:#2563eb,color:#000\n")
 	b.WriteString("    classDef pending fill:#e5e7eb,stroke:#9ca3af,color:#000\n")

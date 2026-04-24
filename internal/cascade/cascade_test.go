@@ -189,7 +189,7 @@ func TestRender_MermaidDiagram(t *testing.T) {
 	}
 
 	// init config and flowchart direction.
-	if !strings.Contains(body, "'fontSize': '9px'") || !strings.Contains(body, "'nodeSpacing': 15") {
+	if !strings.Contains(body, "'fontSize': '12px'") || !strings.Contains(body, "'nodeSpacing': 15") {
 		t.Errorf("missing fontSize/nodeSpacing init config in body:\n%s", body)
 	}
 	if !strings.Contains(body, "flowchart BT") {
