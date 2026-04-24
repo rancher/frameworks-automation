@@ -67,6 +67,11 @@ func (r *Reconciler) pollTracker(ctx context.Context, issue *ghclient.Issue) err
 			log.Printf("pass2: tracker #%d %s %s PR #%d: %q -> %q", issue.Number, t.Repo, t.Branch, t.PR, displayState(t.State), newState)
 			op.Targets[i].State = newState
 			mutated = true
+			if newState == "merged" && strings.HasPrefix(pr.HeadRef, "automation/") {
+				if err := r.gh.DeleteBranch(ctx, ghRepo, pr.HeadRef); err != nil {
+					log.Printf("pass2: tracker #%d delete branch %s: %v", issue.Number, pr.HeadRef, err)
+				}
+			}
 		}
 	}
 

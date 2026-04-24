@@ -254,6 +254,19 @@ func (c *Client) CreatePR(ctx context.Context, repo, title, body, head, base str
 	return toPR(pr), nil
 }
 
+// DeleteBranch deletes a branch in repo. Best-effort: callers log and continue
+// on failure so a stuck branch never blocks tracker closure.
+func (c *Client) DeleteBranch(ctx context.Context, repo, branch string) error {
+	owner, name, err := splitRepo(repo)
+	if err != nil {
+		return err
+	}
+	if _, err := c.gh.Git.DeleteRef(ctx, owner, name, "refs/heads/"+branch); err != nil {
+		return fmt.Errorf("delete branch %s in %s: %w", branch, repo, err)
+	}
+	return nil
+}
+
 // ClosePR closes the PR (does not merge). Posts `comment` first if provided
 // (used for supersede notes).
 func (c *Client) ClosePR(ctx context.Context, repo string, number int, comment string) error {

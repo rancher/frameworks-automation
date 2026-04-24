@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/rancher/release-automation/internal/cascade"
 	ghclient "github.com/rancher/release-automation/internal/github"
@@ -124,6 +125,11 @@ func (r *Reconciler) pollCascadeBumps(ctx context.Context, op *cascade.Op) (bool
 			log.Printf("passCascade: %s %s PR #%d: %q -> %q", bp.Repo, bp.Branch, bp.PR, displayState(bp.State), newState)
 			bp.State = newState
 			mutated = true
+			if newState == "merged" && strings.HasPrefix(pr.HeadRef, "automation/") {
+				if err := r.gh.DeleteBranch(ctx, ghRepo, pr.HeadRef); err != nil {
+					log.Printf("passCascade: delete branch %s: %v", pr.HeadRef, err)
+				}
+			}
 		}
 	}
 	return mutated, nil
