@@ -95,6 +95,16 @@ func (r *Reconciler) RunCascade(ctx context.Context, leafBranch string, independ
 	if err != nil {
 		return fmt.Errorf("compute cascade stages: %w", err)
 	}
+
+	// Reject cascades whose paired-latest sources (or their managed paired
+	// deps) have unreleased commits. Example: norman was committed to but not
+	// tagged; webhook@v0.7.2 (paired-latest) still pins the old norman version;
+	// the cascade would silently skip the new commit unless we block here.
+	leafMinor := leafTable.LookupMinor(leafBranch)
+	if err := r.validatePairedLatestSources(ctx, sources, leafMinor, pairedTables); err != nil {
+		return err
+	}
+
 	if err := r.fillTagPromptHints(ctx, stages, leafTable, pairedTables); err != nil {
 		// Hints are advisory — log and continue with a barer prompt.
 		log.Printf("cascade: fill tag prompt hints: %v", err)
@@ -523,6 +533,130 @@ func (r *Reconciler) predictNextPatch(ctx context.Context, ghRepo, minor string)
 		return minor + ".0", nil
 	}
 	return fmt.Sprintf("%s.%d", minor, highest+1), nil
+}
+
+// validatePairedLatestSources blocks cascade creation when a paired-latest
+// source (or any of its managed paired deps) has unreleased commits. Without
+// this check the cascade would silently use a stale tag for a repo whose
+// branch has moved on, ignoring committed-but-untagged work.
+//
+// Only paired-latest sources are checked (explicit sources are user-supplied
+// and their version is already validated by assertReleaseExists). For each
+// paired source we:
+//
+//  1. Confirm the source's own branch is not ahead of its latest tag.
+//  2. Fetch go.mod at that tag and confirm every managed paired dep's branch
+//     is not ahead of the version pinned there.
+//
+// Independent deps are skipped — their release cycle is decoupled by design.
+func (r *Reconciler) validatePairedLatestSources(
+	ctx context.Context,
+	sources []cascade.Source,
+	leafMinor string,
+	pairedTables map[string]*config.VersionTable,
+) error {
+	moduleToRepo := map[string]string{}
+	for name, repo := range r.cfg.Repos {
+		if repo.Module != "" {
+			moduleToRepo[repo.Module] = name
+		}
+	}
+
+	var errs []string
+	for _, src := range sources {
+		if src.Explicit {
+			continue
+		}
+		srcCfg, ok := r.cfg.Repos[src.Name]
+		if !ok {
+			continue
+		}
+		srcGHRepo, err := srcCfg.GitHubRepo()
+		if err != nil {
+			continue
+		}
+		srcBranch, err := r.branchForRepo(src.Name, leafMinor, pairedTables)
+		if err != nil || srcBranch == "" {
+			log.Printf("cascade validate: %s branch lookup: %v", src.Name, err)
+			continue
+		}
+
+		// Check 1: source's own branch ahead of its paired-latest tag.
+		ahead, err := r.gh.CommitsAheadOf(ctx, srcGHRepo, src.Version, srcBranch)
+		if err != nil {
+			log.Printf("cascade validate: %s ahead check: %v", src.Name, err)
+		} else if ahead > 0 {
+			errs = append(errs, fmt.Sprintf(
+				"%s: branch %s is %d commit(s) ahead of %s — please tag a new release",
+				src.Name, srcBranch, ahead, src.Version))
+		}
+
+		// Check 2: managed paired deps pinned in the source's go.mod have
+		// unreleased commits on their branch.
+		gomod, err := r.gh.FetchFile(ctx, srcGHRepo, src.Version, "go.mod")
+		if err != nil {
+			log.Printf("cascade validate: fetch %s@%s go.mod: %v", src.Name, src.Version, err)
+			continue
+		}
+		mf, err := modfile.Parse("go.mod", []byte(gomod), nil)
+		if err != nil {
+			log.Printf("cascade validate: parse %s@%s go.mod: %v", src.Name, src.Version, err)
+			continue
+		}
+		for _, req := range mf.Require {
+			depName, ok := moduleToRepo[req.Mod.Path]
+			if !ok {
+				continue
+			}
+			depCfg, ok := r.cfg.Repos[depName]
+			if !ok || depCfg.Kind != config.KindPaired {
+				continue
+			}
+			depGHRepo, err := depCfg.GitHubRepo()
+			if err != nil {
+				continue
+			}
+			depBranch, err := r.branchForRepo(depName, leafMinor, pairedTables)
+			if err != nil || depBranch == "" {
+				continue
+			}
+			depAhead, err := r.gh.CommitsAheadOf(ctx, depGHRepo, req.Mod.Version, depBranch)
+			if err != nil {
+				log.Printf("cascade validate: %s dep %s ahead check: %v", src.Name, depName, err)
+				continue
+			}
+			if depAhead > 0 {
+				errs = append(errs, fmt.Sprintf(
+					"%s@%s: dep %s branch %s is %d commit(s) ahead of %s — please tag a new %s release first",
+					src.Name, src.Version, depName, depBranch, depAhead, req.Mod.Version, depName))
+			}
+		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("cascade has stale paired-latest sources; tag the affected repos first:\n  - %s",
+			strings.Join(errs, "\n  - "))
+	}
+	return nil
+}
+
+// branchForRepo returns the branch of `repoName` that corresponds to
+// `leafMinor`. Handles both VERSION.md paired repos and branch-template repos.
+func (r *Reconciler) branchForRepo(repoName, leafMinor string, pairedTables map[string]*config.VersionTable) (string, error) {
+	repoCfg, ok := r.cfg.Repos[repoName]
+	if !ok {
+		return "", fmt.Errorf("repo %q not in config", repoName)
+	}
+	switch repoCfg.Kind {
+	case config.KindIndependent:
+		return "main", nil
+	case config.KindPaired:
+		br, err := repoCfg.ResolveBranch(leafMinor, pairedTables[repoName])
+		if err != nil {
+			return "", fmt.Errorf("resolve branch for %s: %w", repoName, err)
+		}
+		return br, nil
+	}
+	return "", fmt.Errorf("repo %q: unsupported kind %q", repoName, repoCfg.Kind)
 }
 
 // cascadeBumpBranchName is the canonical head-branch name for a cascade bump
