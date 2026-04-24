@@ -240,14 +240,14 @@ func fillBumpDepsFromPriorTags(op *cascade.Op, idx int) {
 }
 
 // tryClaimCascadeTag offers a just-emitted tag to every open cascade. If any
-// cascade has an unclaimed TagPrompt for `dep`, it records (version, Tagged)
-// on the prompt, persists the body, and returns true.
+// cascade is in the awaiting-tags phase of its current stage (all bumps
+// merged) and has an unclaimed TagPrompt for `dep`, it records (version,
+// Tagged) on the prompt, persists the body, and returns true.
 //
-// Matching is by repo (config-key) only — within MVP, a tag for `dep`
-// arriving while a cascade is awaiting one is treated as the satisfying
-// tag. The per-repo Release workflow's branch↔version validation already
-// constrains what tag can land on what branch, so a tag for the wrong
-// branch can't reach this code path.
+// Only the current stage is scanned. Future stages must not pre-claim tags:
+// the cascade state machine requires bumps to merge before the corresponding
+// tag is accepted, and a tag emitted while an earlier stage is still open
+// must not short-circuit the ordering constraint.
 //
 // Returns (false, nil) when no cascade is waiting on this dep — caller
 // proceeds with the regular bump path.
@@ -262,19 +262,24 @@ func (r *Reconciler) tryClaimCascadeTag(ctx context.Context, dep, version string
 			log.Printf("passCascade: claim: cascade #%d unreadable state: %v", issue.Number, err)
 			continue
 		}
+		if st.CurrentStage >= len(st.Stages) {
+			continue
+		}
+		// Only claim when all bumps in the current stage have merged — the
+		// cascade is parked waiting for tags, not still waiting for PRs.
+		if !allBumpsMerged(st.Stages[st.CurrentStage]) {
+			continue
+		}
 		claimed := false
-	stages:
-		for i := range st.Stages {
-			for j := range st.Stages[i].Tags {
-				tg := &st.Stages[i].Tags[j]
-				if tg.Repo != dep || tg.Tagged {
-					continue
-				}
-				tg.Version = version
-				tg.Tagged = true
-				claimed = true
-				break stages
+		for j := range st.Stages[st.CurrentStage].Tags {
+			tg := &st.Stages[st.CurrentStage].Tags[j]
+			if tg.Repo != dep || tg.Tagged {
+				continue
 			}
+			tg.Version = version
+			tg.Tagged = true
+			claimed = true
+			break
 		}
 		if !claimed {
 			continue
