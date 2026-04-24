@@ -188,7 +188,10 @@ func TestRender_MermaidDiagram(t *testing.T) {
 		t.Errorf("section order wrong: Sources=%d Diagram=%d Stage=%d", sourcesIdx, diagramIdx, stageIdx)
 	}
 
-	// flowchart direction.
+	// init config and flowchart direction.
+	if !strings.Contains(body, "'fontSize': '9px'") {
+		t.Errorf("missing fontSize init config in body:\n%s", body)
+	}
 	if !strings.Contains(body, "flowchart BT") {
 		t.Errorf("missing 'flowchart BT' in body:\n%s", body)
 	}
