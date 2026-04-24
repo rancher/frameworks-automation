@@ -301,9 +301,21 @@ func (r *Reconciler) findExistingTagForBump(ctx context.Context, bp *cascade.Bum
 			log.Printf("cascade: check %s@%s: %v", ghRepo, tag, err)
 			continue
 		}
-		if ok {
-			return tag, nil
+		if !ok {
+			continue
 		}
+		// Reject the tag if the branch has advanced past it: unreleased commits
+		// mean the tag doesn't represent the full current state of the branch and
+		// a new release is required.
+		ahead, err := r.gh.CommitsAheadOf(ctx, ghRepo, tag, bp.Branch)
+		if err != nil {
+			log.Printf("cascade: ahead-of check %s %s...%s: %v", ghRepo, tag, bp.Branch, err)
+			continue
+		}
+		if ahead > 0 {
+			return "", nil
+		}
+		return tag, nil
 	}
 	return "", nil
 }

@@ -254,6 +254,21 @@ func (c *Client) CreatePR(ctx context.Context, repo, title, body, head, base str
 	return toPR(pr), nil
 }
 
+// CommitsAheadOf returns how many commits `head` is ahead of `base` in repo.
+// Returns 0 when identical or when base is ahead of head. Used to detect
+// unreleased work on an intermediate branch before claiming an existing tag.
+func (c *Client) CommitsAheadOf(ctx context.Context, repo, base, head string) (int, error) {
+	owner, name, err := splitRepo(repo)
+	if err != nil {
+		return 0, err
+	}
+	cmp, _, err := c.gh.Repositories.CompareCommits(ctx, owner, name, base, head, nil)
+	if err != nil {
+		return 0, fmt.Errorf("compare %s %s...%s: %w", repo, base, head, err)
+	}
+	return cmp.GetAheadBy(), nil
+}
+
 // DeleteBranch deletes a branch in repo. Best-effort: callers log and continue
 // on failure so a stuck branch never blocks tracker closure.
 func (c *Client) DeleteBranch(ctx context.Context, repo, branch string) error {
