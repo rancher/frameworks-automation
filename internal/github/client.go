@@ -146,6 +146,12 @@ func (c *Client) CreateIssue(ctx context.Context, repo, title, body string, labe
 	if err != nil {
 		return nil, err
 	}
+	if labels == nil {
+		labels = []string{}
+	}
+	if assignees == nil {
+		assignees = []string{}
+	}
 	issue, _, err := c.gh.Issues.Create(ctx, owner, name, &gh.IssueRequest{
 		Title:     &title,
 		Body:      &body,
