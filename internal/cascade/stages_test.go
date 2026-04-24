@@ -565,6 +565,73 @@ func TestComputeStages_StalePairedPromotedIntoPropagation(t *testing.T) {
 	}
 }
 
+func TestComputeStages_StaleWebhookProducesChartStage(t *testing.T) {
+	// webhook is stale (unreleased commits). With no explicit independents the
+	// normal cascade resolves webhook as paired-latest and emits a single rancher
+	// bump. With webhook in staleRepos, the forward closure also pulls chart into
+	// propagation (chart depends on webhook), so the cascade should produce:
+	//   stage 1: webhook tag prompt (no in-scope bump deps)
+	//   stage 2: chart bump (webhook dep, empty version until tag arrives)
+	//   stage 3 (final): rancher bump (webhook dep, empty version)
+	cfg := chartLikeCfg()
+	webhookTbl := &config.VersionTable{Rows: []config.VersionRow{
+		{Branch: "main", Minor: "v0.7", Pair: "v2.15"},
+	}}
+	stale := map[string]bool{"webhook": true}
+	_, stages, err := ComputeStages(cfg,
+		map[string]string{},
+		"rancher", "main",
+		rancherTable(),
+		map[string]*config.VersionTable{"webhook": webhookTbl},
+		nilResolver, stale,
+	)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(stages) != 3 {
+		t.Fatalf("want 3 stages (webhook tag-only, chart bump, rancher final), got %d: %+v", len(stages), stages)
+	}
+	// Stage 1: no bumps (wrangler out-of-scope), tag prompt for webhook.
+	st1 := stages[0]
+	if len(st1.Bumps) != 0 {
+		t.Errorf("stage 1 should have no bumps: %+v", st1.Bumps)
+	}
+	if len(st1.Tags) != 1 || st1.Tags[0].Repo != "webhook" {
+		t.Errorf("stage 1 should have a webhook tag prompt: %+v", st1.Tags)
+	}
+	// Stage 2: chart bump with empty webhook version (pending tag), no tag prompt.
+	st2 := stages[1]
+	if len(st2.Bumps) != 1 || st2.Bumps[0].Repo != "chart" {
+		t.Fatalf("stage 2 should bump chart: %+v", st2.Bumps)
+	}
+	if len(st2.Bumps[0].Deps) != 1 || st2.Bumps[0].Deps[0].Dep != "webhook" || st2.Bumps[0].Deps[0].Version != "" {
+		t.Errorf("chart bundle should have webhook with empty version: %+v", st2.Bumps[0].Deps)
+	}
+	if len(st2.Tags) != 0 {
+		t.Errorf("chart stage should be bump-only (rancher consumes chart only via order): %+v", st2.Tags)
+	}
+	// Stage 3 (final): rancher bumps webhook (empty version).
+	st3 := stages[2]
+	if len(st3.Bumps) != 1 || st3.Bumps[0].Repo != "rancher" {
+		t.Fatalf("stage 3 should bump rancher: %+v", st3.Bumps)
+	}
+	foundWebhook := false
+	for _, d := range st3.Bumps[0].Deps {
+		if d.Dep == "webhook" {
+			foundWebhook = true
+			if d.Version != "" {
+				t.Errorf("webhook dep in rancher should be empty until tag arrives: %+v", d)
+			}
+		}
+		if d.Dep == "chart" {
+			t.Errorf("rancher bundle must not include chart (order edge): %+v", d)
+		}
+	}
+	if !foundWebhook {
+		t.Errorf("rancher bundle should include webhook dep: %+v", st3.Bumps[0].Deps)
+	}
+}
+
 func TestComputeStages_RejectsPairedAsExplicit(t *testing.T) {
 	cfg := newCfg()
 	_, _, err := ComputeStages(cfg,

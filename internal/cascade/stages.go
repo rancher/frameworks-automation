@@ -95,10 +95,13 @@ func ComputeStages(
 			propagation[r] = true
 		}
 	}
-	// Stale paired repos (unreleased commits) are promoted from paired-latest
-	// into the propagation set so they receive their own bump→tag stage rather
-	// than being silently consumed at their current tag.
-	for r := range staleRepos {
+	// Stale paired repos (unreleased commits) are promoted into propagation
+	// along with their forward dependents that also feed leaf. Using the full
+	// forward closure (same logic as explicit independents) ensures downstream
+	// consumers like chart — which bumps webhook but is only order-linked to
+	// rancher — also receive bump stages rather than being silently skipped.
+	staleForward := forwardClosure(cfg, staleRepos)
+	for r := range staleForward {
 		if backward[r] && !explicitSet[r] {
 			propagation[r] = true
 		}
