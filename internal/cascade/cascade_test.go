@@ -151,6 +151,87 @@ func TestRender_PairedLatestSource(t *testing.T) {
 	}
 }
 
+func TestRender_MermaidDiagram(t *testing.T) {
+	op := Op{
+		LeafRepo:     "rancher",
+		LeafBranch:   "main",
+		CurrentStage: 1,
+		Sources:      []Source{{Name: "wrangler", Version: "v0.5.1", Explicit: true}},
+		Stages: []Stage{
+			{
+				Layer: 1,
+				Bumps: []Bump{{Repo: "steve", Branch: "main", State: "merged",
+					Deps: []DepBump{{Dep: "wrangler", Module: "github.com/x/wrangler", Version: "v0.5.1"}}}},
+				Tags: []TagPrompt{{Repo: "steve", Branch: "main", Tagged: true, Version: "v0.7.6"}},
+			},
+			{
+				Layer: 2,
+				Bumps: []Bump{{Repo: "rancher", Branch: "main",
+					Deps: []DepBump{{Dep: "steve", Module: "github.com/x/steve"}}}},
+				Tags: []TagPrompt{{Repo: "rancher", Branch: "main"}},
+			},
+		},
+	}
+	body, err := Render(op, time.Date(2026, 4, 24, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+
+	// Diagram block appears between Sources and the first ## Stage header.
+	sourcesIdx := strings.Index(body, "## Sources")
+	diagramIdx := strings.Index(body, "## Diagram")
+	stageIdx := strings.Index(body, "## Stage")
+	if sourcesIdx < 0 || diagramIdx < 0 || stageIdx < 0 {
+		t.Fatalf("missing expected sections in body:\n%s", body)
+	}
+	if !(sourcesIdx < diagramIdx && diagramIdx < stageIdx) {
+		t.Errorf("section order wrong: Sources=%d Diagram=%d Stage=%d", sourcesIdx, diagramIdx, stageIdx)
+	}
+
+	// flowchart direction.
+	if !strings.Contains(body, "flowchart BT") {
+		t.Errorf("missing 'flowchart BT' in body:\n%s", body)
+	}
+
+	// Merged bump is :::done; unmerged bump is :::pending.
+	if !strings.Contains(body, `"bump steve@main"]:::done`) {
+		t.Errorf("merged bump should be :::done:\n%s", body)
+	}
+	if !strings.Contains(body, `"bump rancher@main"]:::pending`) {
+		t.Errorf("unmerged bump should be :::pending:\n%s", body)
+	}
+
+	// Tagged tag is :::done; untagged tag is :::pending.
+	if !strings.Contains(body, `"tag steve@main"]:::done`) {
+		t.Errorf("tagged tag should be :::done:\n%s", body)
+	}
+	if !strings.Contains(body, `"tag rancher@main"]:::pending`) {
+		t.Errorf("untagged tag should be :::pending:\n%s", body)
+	}
+
+	// Stage subgraph classes: i=0 < CurrentStage=1 → done; i=1 == CurrentStage → current.
+	if !strings.Contains(body, "class S0 done") {
+		t.Errorf("stage 0 should be class done:\n%s", body)
+	}
+	if !strings.Contains(body, "class S1 current") {
+		t.Errorf("stage 1 should be class current:\n%s", body)
+	}
+
+	// Inter-stage edge.
+	if !strings.Contains(body, "S0 --> S1") {
+		t.Errorf("missing inter-stage edge S0 --> S1:\n%s", body)
+	}
+
+	// Existing assertions still pass: state block round-trips.
+	st, err := ExtractState(body)
+	if err != nil {
+		t.Fatalf("extract state: %v", err)
+	}
+	if len(st.Stages) != 2 {
+		t.Errorf("expected 2 stages in state, got %d", len(st.Stages))
+	}
+}
+
 func TestRenderTagRef(t *testing.T) {
 	cases := []struct {
 		name string

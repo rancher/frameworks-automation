@@ -212,6 +212,12 @@ func Render(op Op, now time.Time) (string, error) {
 		b.WriteString("\n")
 	}
 
+	if len(op.Stages) > 0 {
+		b.WriteString("## Diagram\n```mermaid\n")
+		b.WriteString(renderMermaid(op))
+		b.WriteString("```\n\n")
+	}
+
 	for i, st := range op.Stages {
 		marker := ""
 		switch {
@@ -256,6 +262,55 @@ func Render(op Op, now time.Time) (string, error) {
 		return "", err
 	}
 	return body, nil
+}
+
+func renderMermaid(op Op) string {
+	var b strings.Builder
+	b.WriteString("flowchart BT\n")
+	b.WriteString("    classDef done fill:#86efac,stroke:#16a34a,color:#000\n")
+	b.WriteString("    classDef current fill:#bfdbfe,stroke:#2563eb,color:#000\n")
+	b.WriteString("    classDef pending fill:#e5e7eb,stroke:#9ca3af,color:#000\n")
+
+	for i, st := range op.Stages {
+		final := i == len(op.Stages)-1
+		label := fmt.Sprintf("Stage %d", st.Layer)
+		if final {
+			label += " (final)"
+		}
+		fmt.Fprintf(&b, "\n    subgraph S%d[\"%s\"]\n        direction LR\n", i, label)
+		for j, bp := range st.Bumps {
+			cls := "pending"
+			if bp.State == "merged" {
+				cls = "done"
+			}
+			fmt.Fprintf(&b, "        S%dB%d[\"bump %s@%s\"]:::%s\n", i, j, bp.Repo, bp.Branch, cls)
+		}
+		for j, tg := range st.Tags {
+			cls := "pending"
+			if tg.Tagged {
+				cls = "done"
+			}
+			fmt.Fprintf(&b, "        S%dT%d[\"tag %s@%s\"]:::%s\n", i, j, tg.Repo, tg.Branch, cls)
+		}
+		b.WriteString("    end\n")
+
+		stageCls := "pending"
+		switch {
+		case i < op.CurrentStage:
+			stageCls = "done"
+		case i == op.CurrentStage:
+			stageCls = "current"
+		}
+		fmt.Fprintf(&b, "    class S%d %s\n", i, stageCls)
+	}
+
+	for i := 1; i < len(op.Stages); i++ {
+		fmt.Fprintf(&b, "\n    S%d --> S%d", i-1, i)
+	}
+	if len(op.Stages) > 1 {
+		b.WriteString("\n")
+	}
+	return b.String()
 }
 
 func displayVersion(v string) string {
