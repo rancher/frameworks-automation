@@ -17,6 +17,15 @@ type Issue struct {
 	Body   string
 }
 
+// IssueAPI is the slice of the GitHub client this package needs. Declared
+// here so callers (and tests) can supply any implementation; the concrete
+// *ghclient.Client satisfies it via duck typing.
+type IssueAPI interface {
+	ListOpenIssues(ctx context.Context, repo string, labels []string) ([]*ghclient.Issue, error)
+	CreateIssue(ctx context.Context, repo, title, body string, labels, assignees []string) (*ghclient.Issue, error)
+	UpdateIssueBody(ctx context.Context, repo string, num int, body string) error
+}
+
 // SupersedeFunc is invoked by FindOrCreate for every existing open cascade on
 // the same (leafRepo, leafBranch) whose stored explicit-source set differs
 // from the new op. Caller decides what supersede means — typically: close
@@ -34,7 +43,7 @@ type SupersedeFunc func(ctx context.Context, old *Issue) error
 //     then create a fresh issue rendered from op.
 func FindOrCreate(
 	ctx context.Context,
-	gh *ghclient.Client,
+	gh IssueAPI,
 	automationRepo string,
 	op *Op,
 	supersede SupersedeFunc,
@@ -90,7 +99,7 @@ func FindOrCreate(
 }
 
 // UpdateBody re-renders `op` and pushes the new body to the cascade issue.
-func UpdateBody(ctx context.Context, gh *ghclient.Client, automationRepo string, issueNum int, op Op) error {
+func UpdateBody(ctx context.Context, gh IssueAPI, automationRepo string, issueNum int, op Op) error {
 	body, err := renderForCreate(op)
 	if err != nil {
 		return err

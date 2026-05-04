@@ -1,0 +1,35 @@
+# Same outcome as norman_pin_drift, but every branch is a release/* branch
+# resolved via VERSION.md BranchForPair("v2.13"). The resolved paired-latest
+# tag for norman MUST be filtered to the v0.5 minor (v0.9.4 must be ignored).
+
+sources:
+  - {name: norman, version: v0.5.3, explicit: false}
+
+stages:
+  - layer: 1
+    bumps:
+      - repo: steve
+        branch: release/v0.7
+        deps:
+          - {dep: norman, module: github.com/x/norman, version: v0.5.3}
+    tags:
+      - {repo: steve, branch: release/v0.7}
+  - layer: 2
+    bumps:
+      - repo: rancher
+        branch: release/v2.13
+        deps:
+          - {dep: steve, module: github.com/x/steve, version: ""}
+    tags: []
+
+issue:
+  title: "[cascade] rancher release/v2.13"
+  labels:
+    - cascade-op
+    - "leaf:rancher:release/v2.13"
+
+prs_opened:
+  - repo: x/steve
+    base: release/v0.7
+    modules:
+      - {path: github.com/x/norman, version: v0.5.3}

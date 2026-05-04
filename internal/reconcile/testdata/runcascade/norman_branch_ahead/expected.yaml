@@ -1,0 +1,45 @@
+# Same shape as norman_pin_drift but norman has UNRELEASED COMMITS past its
+# latest tag (v0.9.3). A new norman tag is needed before the chain can move.
+#
+# Branch-ahead detection (already implemented in detectStalePairedRepos)
+# promotes norman into propagation. norman's forward closure pulls steve and
+# rancher in for free, so the full chain ends up in propagation regardless
+# of whether pin-drift detection ever lands.
+#
+# Resulting cascade (3 stages):
+#   Stage 1: tag norman (no bump — norman has no in-scope deps to update).
+#   Stage 2: bump steve [norman→pending] + tag steve.
+#   Stage 3: bump rancher [steve→pending] (final, no tag prompt).
+#
+# No PRs open at cascade creation: stage 1 is tag-only.
+
+sources: []
+
+stages:
+  - layer: 1
+    bumps: []
+    tags:
+      - {repo: norman, branch: main}
+  - layer: 2
+    bumps:
+      - repo: steve
+        branch: main
+        deps:
+          - {dep: norman, module: github.com/x/norman, version: ""}
+    tags:
+      - {repo: steve, branch: main}
+  - layer: 3
+    bumps:
+      - repo: rancher
+        branch: main
+        deps:
+          - {dep: steve, module: github.com/x/steve, version: ""}
+    tags: []
+
+issue:
+  title: "[cascade] rancher main"
+  labels:
+    - cascade-op
+    - "leaf:rancher:main"
+
+prs_opened: []

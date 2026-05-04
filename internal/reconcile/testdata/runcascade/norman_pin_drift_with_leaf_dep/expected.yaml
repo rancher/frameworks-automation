@@ -1,0 +1,48 @@
+# Same pin-drift scenario as norman_pin_drift, but rancher (the leaf) now
+# pins norman directly in addition to its steve pin. Desired behavior:
+#
+#   - steve gets promoted into the propagation set (its norman v0.9.1 pin
+#     lags norman's latest tag v0.9.3).
+#   - norman remains a paired-latest source pinned at v0.9.3 — it has no
+#     unreleased commits and no upstream of its own.
+#   - Stage 1 bumps norman into steve and prompts a steve tag.
+#   - Stage 2 (final) bumps rancher with TWO deps in one PR: norman pinned
+#     at v0.9.3 (paired-latest, version known up front) AND steve pending
+#     (filled when stage 1's tag arrives).
+#
+# Will FAIL today for the same reason as norman_pin_drift: detectStalePaired
+# Repos doesn't catch pin-drift, so the cascade collapses into a single
+# rancher bump bundling steve@v1.5.0 + norman@v0.9.3.
+
+sources:
+  - {name: norman, version: v0.9.3, explicit: false}
+
+stages:
+  - layer: 1
+    bumps:
+      - repo: steve
+        branch: main
+        deps:
+          - {dep: norman, module: github.com/x/norman, version: v0.9.3}
+    tags:
+      - {repo: steve, branch: main}
+  - layer: 2
+    bumps:
+      - repo: rancher
+        branch: main
+        deps:
+          - {dep: norman, module: github.com/x/norman, version: v0.9.3}
+          - {dep: steve, module: github.com/x/steve, version: ""}
+    tags: []
+
+issue:
+  title: "[cascade] rancher main"
+  labels:
+    - cascade-op
+    - "leaf:rancher:main"
+
+prs_opened:
+  - repo: x/steve
+    base: main
+    modules:
+      - {path: github.com/x/norman, version: v0.9.3}

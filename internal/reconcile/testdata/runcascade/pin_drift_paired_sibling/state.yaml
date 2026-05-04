@@ -1,0 +1,93 @@
+automation_repo: rancher/release-automation
+github_actor: tomleb
+
+trigger:
+  leaf_branch: main
+  independents: {}
+
+modules:
+  rancher: [github.com/x/rancher]
+  steve:   [github.com/x/steve]
+  norman:  [github.com/x/norman]
+  webhook: [github.com/x/webhook]
+
+# rancher consumes two paired deps directly: steve (which has pin drift on
+# norman) and webhook (which is fresh, no upstream of its own). The fix should
+# promote ONLY steve into propagation; webhook should stay a paired-latest
+# source in rancher's stage-2 bundle.
+
+repos:
+  x/rancher:
+    gh_repo: x/rancher
+    default_branch: main
+    tags: [v2.15.0]
+    branches:
+      main:
+        files:
+          go.mod: |
+            module github.com/x/rancher
+            go 1.24
+            require (
+              github.com/x/steve v1.5.0
+              github.com/x/webhook v0.7.4
+            )
+        ahead_of:
+          v2.15.0: 0
+
+  x/steve:
+    gh_repo: x/steve
+    default_branch: main
+    tags: [v1.5.0]
+    branches:
+      main:
+        files:
+          # Pin drift: norman v0.9.1 lags norman's latest tag v0.9.3.
+          go.mod: |
+            module github.com/x/steve
+            go 1.24
+            require github.com/x/norman v0.9.1
+        ahead_of:
+          v1.5.0: 0
+    tag_files:
+      v1.5.0:
+        go.mod: |
+          module github.com/x/steve
+          go 1.24
+          require github.com/x/norman v0.9.1
+
+  x/norman:
+    gh_repo: x/norman
+    default_branch: main
+    tags: [v0.9.3, v0.9.2, v0.9.1]
+    branches:
+      main:
+        files:
+          go.mod: |
+            module github.com/x/norman
+            go 1.24
+        ahead_of:
+          v0.9.3: 0
+    tag_files:
+      v0.9.3:
+        go.mod: |
+          module github.com/x/norman
+          go 1.24
+
+  x/webhook:
+    gh_repo: x/webhook
+    default_branch: main
+    tags: [v0.7.4, v0.7.3]
+    branches:
+      main:
+        files:
+          # Webhook is fresh and has no paired upstream — nothing to drift on.
+          go.mod: |
+            module github.com/x/webhook
+            go 1.24
+        ahead_of:
+          v0.7.4: 0
+    tag_files:
+      v0.7.4:
+        go.mod: |
+          module github.com/x/webhook
+          go 1.24

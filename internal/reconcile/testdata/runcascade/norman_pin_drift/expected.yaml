@@ -1,0 +1,43 @@
+# Desired cascade plan when the user triggers RunCascade on rancher main with
+# no explicit independents and steve's go.mod pins norman v0.9.1 while norman's
+# latest released tag is v0.9.3 (no commits past v0.9.3).
+#
+# norman is already at the desired version (no new release needed); steve must
+# bump its norman pin and re-tag; rancher then bumps steve to the new tag.
+#
+# This expectation will FAIL today: detectStalePairedRepos only flags repos
+# whose branch is ahead of their latest tag, not repos whose go.mod pin lags
+# an upstream's latest tag. The follow-up fix promotes steve into propagation
+# whenever any of its in-scope deps' pins lag the dep's latest tag.
+
+sources:
+  - {name: norman, version: v0.9.3, explicit: false}
+
+stages:
+  - layer: 1
+    bumps:
+      - repo: steve
+        branch: main
+        deps:
+          - {dep: norman, module: github.com/x/norman, version: v0.9.3}
+    tags:
+      - {repo: steve, branch: main}
+  - layer: 2
+    bumps:
+      - repo: rancher
+        branch: main
+        deps:
+          - {dep: steve, module: github.com/x/steve, version: ""}
+    tags: []
+
+issue:
+  title: "[cascade] rancher main"
+  labels:
+    - cascade-op
+    - "leaf:rancher:main"
+
+prs_opened:
+  - repo: x/steve
+    base: main
+    modules:
+      - {path: github.com/x/norman, version: v0.9.3}

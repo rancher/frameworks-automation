@@ -1,0 +1,88 @@
+automation_repo: rancher/release-automation
+github_actor: tomleb
+
+# Trigger: a freshly-released wrangler v0.5.1 is the explicit independent
+# source. Cascade should walk wrangler → norman → steve → rancher, opening
+# stage 1 (norman bump) immediately and parking stages 2–3 until each prior
+# stage's tag arrives.
+trigger:
+  leaf_branch: main
+  independents:
+    wrangler: v0.5.1
+
+modules:
+  rancher:  [github.com/x/rancher]
+  steve:    [github.com/x/steve]
+  norman:   [github.com/x/norman]
+  wrangler: [github.com/x/wrangler]
+
+repos:
+  x/rancher:
+    gh_repo: x/rancher
+    default_branch: main
+    tags: [v2.15.0]
+    branches:
+      main:
+        files:
+          go.mod: |
+            module github.com/x/rancher
+            go 1.24
+            require github.com/x/steve v1.5.0
+        ahead_of:
+          v2.15.0: 0
+
+  x/steve:
+    gh_repo: x/steve
+    default_branch: main
+    tags: [v1.5.0]
+    branches:
+      main:
+        files:
+          go.mod: |
+            module github.com/x/steve
+            go 1.24
+            require github.com/x/norman v0.9.3
+        ahead_of:
+          v1.5.0: 0
+    tag_files:
+      v1.5.0:
+        go.mod: |
+          module github.com/x/steve
+          go 1.24
+          require github.com/x/norman v0.9.3
+
+  x/norman:
+    gh_repo: x/norman
+    default_branch: main
+    tags: [v0.9.3, v0.9.2, v0.9.1]
+    branches:
+      main:
+        files:
+          # Norman currently pins wrangler v0.5.0; the trigger brings v0.5.1.
+          go.mod: |
+            module github.com/x/norman
+            go 1.24
+            require github.com/x/wrangler v0.5.0
+        ahead_of:
+          v0.9.3: 0
+    tag_files:
+      v0.9.3:
+        go.mod: |
+          module github.com/x/norman
+          go 1.24
+          require github.com/x/wrangler v0.5.0
+
+  x/wrangler:
+    gh_repo: x/wrangler
+    default_branch: main
+    # v0.5.1 must appear here so assertReleaseExists accepts the trigger
+    # version as a published release.
+    tags: [v0.5.1, v0.5.0]
+    branches:
+      main:
+        files:
+          go.mod: |
+            module github.com/x/wrangler
+            go 1.24
+        ahead_of:
+          v0.5.1: 0

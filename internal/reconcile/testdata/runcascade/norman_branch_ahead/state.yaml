@@ -1,0 +1,68 @@
+automation_repo: rancher/release-automation
+github_actor: tomleb
+
+trigger:
+  leaf_branch: main
+  independents: {}
+
+modules:
+  rancher: [github.com/x/rancher]
+  steve:   [github.com/x/steve]
+  norman:  [github.com/x/norman]
+
+repos:
+  x/rancher:
+    gh_repo: x/rancher
+    default_branch: main
+    tags: [v2.15.0]
+    branches:
+      main:
+        files:
+          go.mod: |
+            module github.com/x/rancher
+            go 1.24
+            require github.com/x/steve v1.5.0
+        ahead_of:
+          v2.15.0: 0
+
+  x/steve:
+    gh_repo: x/steve
+    default_branch: main
+    tags: [v1.5.0]
+    branches:
+      main:
+        files:
+          go.mod: |
+            module github.com/x/steve
+            go 1.24
+            require github.com/x/norman v0.9.1
+        ahead_of:
+          v1.5.0: 0
+    tag_files:
+      v1.5.0:
+        go.mod: |
+          module github.com/x/steve
+          go 1.24
+          require github.com/x/norman v0.9.1
+
+  x/norman:
+    gh_repo: x/norman
+    default_branch: main
+    tags: [v0.9.3, v0.9.2, v0.9.1]
+    branches:
+      main:
+        files:
+          go.mod: |
+            module github.com/x/norman
+            go 1.24
+        # Norman has 2 commits past its latest tag — a new release is needed
+        # before steve can be re-cut. detectStalePairedRepos already catches
+        # this (branch-ahead detection), so the cascade should produce a
+        # 3-stage plan: tag norman → bump+tag steve → bump rancher.
+        ahead_of:
+          v0.9.3: 2
+    tag_files:
+      v0.9.3:
+        go.mod: |
+          module github.com/x/norman
+          go 1.24

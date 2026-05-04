@@ -20,6 +20,16 @@ type Issue struct {
 	Body   string // current rendered body, including embedded metadata
 }
 
+// API is the slice of the GitHub client this package needs. *ghclient.Client
+// satisfies it via duck typing; tests can supply an in-memory fake.
+type API interface {
+	ListOpenIssues(ctx context.Context, repo string, labels []string) ([]*ghclient.Issue, error)
+	CreateIssue(ctx context.Context, repo, title, body string, labels, assignees []string) (*ghclient.Issue, error)
+	UpdateIssueBody(ctx context.Context, repo string, num int, body string) error
+	CloseIssue(ctx context.Context, repo string, num int, comment string) error
+	ClosePR(ctx context.Context, repo string, num int, comment string) error
+}
+
 // FindOrCreate looks up the open tracker for (op.Dep, op.Version,
 // op.LeafRepo, op.LeafBranch) in the automation repo. If absent, creates
 // one rendered from `op`. If present, merges any state already stored in
@@ -29,7 +39,7 @@ type Issue struct {
 // by version parsed from the title. The label triple alone usually returns
 // one issue (older versions for the same leaf get superseded); the version
 // filter handles the brief overlap window.
-func FindOrCreate(ctx context.Context, gh *ghclient.Client, automationRepo string, op *Op) (*Issue, error) {
+func FindOrCreate(ctx context.Context, gh API, automationRepo string, op *Op) (*Issue, error) {
 	labels := Labels(op.Dep, op.LeafRepo, op.LeafBranch)
 	candidates, err := gh.ListOpenIssues(ctx, automationRepo, labels)
 	if err != nil {
@@ -60,7 +70,7 @@ func FindOrCreate(ctx context.Context, gh *ghclient.Client, automationRepo strin
 
 // UpdateBody re-renders `op` and pushes the new body to the tracker issue.
 // Call after mutating op.Targets (e.g. after opening a PR).
-func UpdateBody(ctx context.Context, gh *ghclient.Client, automationRepo string, issueNum int, op Op) error {
+func UpdateBody(ctx context.Context, gh API, automationRepo string, issueNum int, op Op) error {
 	body, err := renderForCreate(op)
 	if err != nil {
 		return err
@@ -79,7 +89,7 @@ func UpdateBody(ctx context.Context, gh *ghclient.Client, automationRepo string,
 //
 // "Older" is a strict semver comparison — equal versions don't supersede
 // (FindOrCreate handles the dedupe for the same version).
-func Supersede(ctx context.Context, gh *ghclient.Client, automationRepo string, dep, leafRepo, leafBranch, newVersion string, newTrackerURL string) error {
+func Supersede(ctx context.Context, gh API, automationRepo string, dep, leafRepo, leafBranch, newVersion string, newTrackerURL string) error {
 	open, err := gh.ListOpenIssues(ctx, automationRepo, Labels(dep, leafRepo, leafBranch))
 	if err != nil {
 		return fmt.Errorf("scan trackers for dep:%s leaf:%s:%s: %w", dep, leafRepo, leafBranch, err)

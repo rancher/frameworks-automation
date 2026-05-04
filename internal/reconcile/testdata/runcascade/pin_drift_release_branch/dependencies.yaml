@@ -1,0 +1,26 @@
+repos:
+  rancher:
+    kind: leaf
+    repo: x/rancher
+    version-md: |
+      | Rancher Branch | Rancher Minor |
+      |---|---|
+      | release/v2.13 | v2.13 |
+    deps:
+      - {name: steve}
+  steve:
+    kind: paired
+    repo: x/steve
+    version-md: |
+      | Steve Branch | Steve Minor | Matching Rancher Version |
+      |---|---|---|
+      | release/v0.7 | v0.7 | v2.13 |
+    deps:
+      - {name: norman}
+  norman:
+    kind: paired
+    repo: x/norman
+    version-md: |
+      | Norman Branch | Norman Minor | Matching Rancher Version |
+      |---|---|---|
+      | release/v0.5 | v0.5 | v2.13 |

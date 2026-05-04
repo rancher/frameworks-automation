@@ -546,9 +546,16 @@ func (r *Reconciler) predictNextPatch(ctx context.Context, ghRepo, minor string)
 }
 
 // detectStalePairedRepos scans paired-latest sources (and their managed paired
-// deps transitively) for unreleased commits. Any repo whose branch is ahead of
-// its latest tag is "stale" and should be promoted into the cascade's
-// propagation set so it gets a proper bump→tag stage.
+// deps transitively) for two flavors of staleness, both of which require
+// promoting the affected repo into the cascade's propagation set so it gets a
+// proper bump→tag stage:
+//
+//  1. Branch-ahead: the repo's branch HEAD has unreleased commits past its
+//     latest tag. The next release will be from HEAD, so a re-cut is needed.
+//  2. Pin-drift: the repo's go.mod (at its latest tag) pins one of its paired
+//     deps at a version BELOW that dep's own latest tag. Without a re-cut,
+//     downstream consumers picking up this repo at paired-latest would inherit
+//     the stale upstream pin.
 //
 // The scan starts from each paired-latest source and follows go.mod deps one
 // level at a time. Independent deps are skipped — their release cycle is
@@ -560,6 +567,28 @@ func (r *Reconciler) detectStalePairedRepos(
 	pairedTables map[string]*config.VersionTable,
 ) (map[string]bool, error) {
 	moduleToRepo := r.cfg.ModuleToRepo()
+
+	// depLatest caches per-dep latest-tag lookups so multiple parents pinning
+	// the same dep don't trigger duplicate ListReleaseTags calls. An empty
+	// string is a valid cached value (means "no published release on this
+	// branch") and short-circuits the pin-drift comparison.
+	depLatest := map[string]string{}
+	resolveDepLatest := func(depName string) (string, error) {
+		if v, ok := depLatest[depName]; ok {
+			return v, nil
+		}
+		br, err := r.branchForRepo(depName, leafMinor, pairedTables)
+		if err != nil || br == "" {
+			depLatest[depName] = ""
+			return "", err
+		}
+		tag, err := r.resolveLatestForBranch(ctx, depName, br)
+		if err != nil {
+			return "", err
+		}
+		depLatest[depName] = tag
+		return tag, nil
+	}
 
 	stale := map[string]bool{}
 	queue := map[string]bool{}
@@ -608,6 +637,7 @@ func (r *Reconciler) detectStalePairedRepos(
 			log.Printf("cascade stale: %s has no released tag on %s — skipping", name, branch)
 			continue
 		}
+		depLatest[name] = latestTag
 
 		ahead, err := r.gh.CommitsAheadOf(ctx, ghRepo, latestTag, branch)
 		if err != nil {
@@ -630,14 +660,31 @@ func (r *Reconciler) detectStalePairedRepos(
 		}
 		for _, req := range mf.Require {
 			depName, ok := moduleToRepo[req.Mod.Path]
-			if !ok || checked[depName] {
+			if !ok {
 				continue
 			}
 			depCfg, ok := r.cfg.Repos[depName]
 			if !ok || depCfg.Kind != config.KindPaired {
 				continue
 			}
-			queue[depName] = true
+
+			// Pin-drift: the parent's released go.mod pins this dep at a
+			// version below the dep's own latest tag. Without a re-cut, any
+			// downstream picking the parent up at paired-latest inherits the
+			// stale upstream pin. Mark the PARENT (`name`) stale.
+			if pinVer := req.Mod.Version; semver.IsValid(pinVer) {
+				if depTag, err := resolveDepLatest(depName); err != nil {
+					log.Printf("cascade stale: %s pin-drift check for %s: %v", name, depName, err)
+				} else if depTag != "" && semver.Compare(pinVer, depTag) < 0 && !stale[name] {
+					log.Printf("cascade: %s pins %s %s but %s latest tag is %s — promoting %s into cascade stages",
+						name, depName, pinVer, depName, depTag, name)
+					stale[name] = true
+				}
+			}
+
+			if !checked[depName] {
+				queue[depName] = true
+			}
 		}
 	}
 	return stale, nil

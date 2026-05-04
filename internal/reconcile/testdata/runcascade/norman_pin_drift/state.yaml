@@ -1,0 +1,72 @@
+automation_repo: rancher/release-automation
+github_actor: tomleb
+
+trigger:
+  leaf_branch: main
+  independents: {}
+
+# Module paths the cascade will use to bump go.mod requires. Populated into
+# cfg.Modules (the real reconciler discovers these from the GitHub Trees API
+# at startup; tests declare them explicitly).
+modules:
+  rancher: [github.com/x/rancher]
+  steve:   [github.com/x/steve]
+  norman:  [github.com/x/norman]
+
+repos:
+  x/rancher:
+    gh_repo: x/rancher
+    default_branch: main
+    tags: [v2.15.0]
+    branches:
+      main:
+        files:
+          go.mod: |
+            module github.com/x/rancher
+            go 1.24
+            require github.com/x/steve v1.5.0
+        ahead_of:
+          v2.15.0: 0
+
+  x/steve:
+    gh_repo: x/steve
+    default_branch: main
+    tags: [v1.5.0]
+    branches:
+      main:
+        files:
+          # Steve's HEAD pins norman v0.9.1 — the same as its latest tag.
+          # Branch is at the tag (no unreleased commits) but the pin lags
+          # norman's latest tag (v0.9.3). This is the bug-defining drift:
+          # current detectStalePairedRepos won't catch it; the desired
+          # behavior is to promote steve into the cascade propagation set.
+          go.mod: |
+            module github.com/x/steve
+            go 1.24
+            require github.com/x/norman v0.9.1
+        ahead_of:
+          v1.5.0: 0
+    tag_files:
+      v1.5.0:
+        go.mod: |
+          module github.com/x/steve
+          go 1.24
+          require github.com/x/norman v0.9.1
+
+  x/norman:
+    gh_repo: x/norman
+    default_branch: main
+    tags: [v0.9.3, v0.9.2, v0.9.1]
+    branches:
+      main:
+        files:
+          go.mod: |
+            module github.com/x/norman
+            go 1.24
+        ahead_of:
+          v0.9.3: 0
+    tag_files:
+      v0.9.3:
+        go.mod: |
+          module github.com/x/norman
+          go 1.24

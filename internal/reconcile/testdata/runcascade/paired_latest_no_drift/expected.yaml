@@ -1,0 +1,32 @@
+# With every paired pin matching its upstream's latest tag, no repo gets
+# promoted into propagation. The cascade collapses to a single final stage
+# bumping rancher with steve's current latest — the routine "keep rancher
+# up to date with paired-latest" path.
+#
+# This locks in non-regression for the pin-drift fix: a future change that
+# tweaks the comparison from `<` to `<=` (or otherwise broadens the trigger)
+# would over-promote steve here and break this fixture.
+
+sources:
+  - {name: steve, version: v1.5.0, explicit: false}
+
+stages:
+  - layer: 1
+    bumps:
+      - repo: rancher
+        branch: main
+        deps:
+          - {dep: steve, module: github.com/x/steve, version: v1.5.0}
+    tags: []
+
+issue:
+  title: "[cascade] rancher main"
+  labels:
+    - cascade-op
+    - "leaf:rancher:main"
+
+prs_opened:
+  - repo: x/rancher
+    base: main
+    modules:
+      - {path: github.com/x/steve, version: v1.5.0}

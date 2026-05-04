@@ -1,0 +1,75 @@
+automation_repo: rancher/release-automation
+github_actor: tomleb
+
+# Cascade triggered on rancher's release/v2.13 branch (not main). Same
+# pin-drift shape as norman_pin_drift, but every paired branch is now
+# resolved via VERSION.md BranchForPair("v2.13") rather than the trivial
+# main → main mapping. This exercises the resolveDepLatest helper's
+# branchForRepo path on a real release-branch leafMinor.
+
+trigger:
+  leaf_branch: release/v2.13
+  independents: {}
+
+modules:
+  rancher: [github.com/x/rancher]
+  steve:   [github.com/x/steve]
+  norman:  [github.com/x/norman]
+
+repos:
+  x/rancher:
+    gh_repo: x/rancher
+    default_branch: release/v2.13
+    tags: [v2.13.4, v2.13.3]
+    branches:
+      release/v2.13:
+        files:
+          go.mod: |
+            module github.com/x/rancher
+            go 1.24
+            require github.com/x/steve v0.7.5
+        ahead_of:
+          v2.13.4: 0
+
+  x/steve:
+    gh_repo: x/steve
+    default_branch: release/v0.7
+    tags: [v0.7.5, v1.5.0]
+    branches:
+      release/v0.7:
+        files:
+          # Pin drift on a release branch: norman v0.5.1 lags v0.5.3.
+          go.mod: |
+            module github.com/x/steve
+            go 1.24
+            require github.com/x/norman v0.5.1
+        ahead_of:
+          v0.7.5: 0
+    tag_files:
+      v0.7.5:
+        go.mod: |
+          module github.com/x/steve
+          go 1.24
+          require github.com/x/norman v0.5.1
+
+  x/norman:
+    gh_repo: x/norman
+    default_branch: release/v0.5
+    # ListReleaseTags returns every release across the repo; the cascade
+    # filters by the v0.5 minor when resolving paired-latest for release/v0.5,
+    # so adding a v0.9 tag here verifies the minor filter (it must NOT be
+    # picked up).
+    tags: [v0.9.4, v0.5.3, v0.5.2, v0.5.1]
+    branches:
+      release/v0.5:
+        files:
+          go.mod: |
+            module github.com/x/norman
+            go 1.24
+        ahead_of:
+          v0.5.3: 0
+    tag_files:
+      v0.5.3:
+        go.mod: |
+          module github.com/x/norman
+          go 1.24

@@ -1,0 +1,47 @@
+# Pin-drift detection should mark steve stale (because steve pins norman
+# v0.9.1 < norman latest v0.9.3) but leave webhook untouched. webhook is a
+# paired sibling of steve under rancher with no relationship to norman; it
+# should stay a paired-latest source in rancher's final-stage bundle.
+#
+# Resulting cascade (2 stages):
+#   Stage 1: bump steve [norman→v0.9.3] + tag steve.
+#   Stage 2 (final): bump rancher with TWO deps in one PR — steve (pending,
+#     filled when stage-1 tag arrives) AND webhook@v0.7.4 (paired-latest,
+#     known up front).
+#
+# Sources show both paired-latest entries: norman (consumed by steve) and
+# webhook (consumed by rancher).
+
+sources:
+  - {name: norman,  version: v0.9.3, explicit: false}
+  - {name: webhook, version: v0.7.4, explicit: false}
+
+stages:
+  - layer: 1
+    bumps:
+      - repo: steve
+        branch: main
+        deps:
+          - {dep: norman, module: github.com/x/norman, version: v0.9.3}
+    tags:
+      - {repo: steve, branch: main}
+  - layer: 2
+    bumps:
+      - repo: rancher
+        branch: main
+        deps:
+          - {dep: steve,   module: github.com/x/steve,   version: ""}
+          - {dep: webhook, module: github.com/x/webhook, version: v0.7.4}
+    tags: []
+
+issue:
+  title: "[cascade] rancher main"
+  labels:
+    - cascade-op
+    - "leaf:rancher:main"
+
+prs_opened:
+  - repo: x/steve
+    base: main
+    modules:
+      - {path: github.com/x/norman, version: v0.9.3}

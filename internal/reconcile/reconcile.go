@@ -33,11 +33,38 @@ type DispatchEvent struct {
 	SHA  string // commit SHA the tag points at
 }
 
+// gitHubClient is the slice of *ghclient.Client this package depends on. The
+// union covers every method called directly on r.gh across the reconcile
+// package plus the methods it forwards to cascade.FindOrCreate / UpdateBody
+// (so r.gh structurally satisfies cascade.IssueAPI). *ghclient.Client
+// satisfies this interface via duck typing — no method changes on the real
+// client.
+type gitHubClient interface {
+	FetchFile(ctx context.Context, repo, ref, path string) (string, error)
+	GetLatestReleaseTag(ctx context.Context, repo string) (string, error)
+	ListReleaseTags(ctx context.Context, repo string) ([]string, error)
+	CommitsAheadOf(ctx context.Context, repo, base, head string) (int, error)
+	GetPR(ctx context.Context, repo string, number int) (*ghclient.PR, error)
+	ClosePR(ctx context.Context, repo string, number int, comment string) error
+	DeleteBranch(ctx context.Context, repo, branch string) error
+	ListOpenIssues(ctx context.Context, repo string, labels []string) ([]*ghclient.Issue, error)
+	ListIssuesAllStates(ctx context.Context, repo string, labels []string) ([]*ghclient.Issue, error)
+	CreateIssue(ctx context.Context, repo, title, body string, labels, assignees []string) (*ghclient.Issue, error)
+	UpdateIssueBody(ctx context.Context, repo string, number int, body string) error
+	CloseIssue(ctx context.Context, repo string, number int, comment string) error
+}
+
+// Bumper is what the reconciler needs from a PR-bump executor. Production
+// uses *pr.Bumper; tests inject a recording fake.
+type Bumper interface {
+	Open(ctx context.Context, req pr.Request) (*pr.Result, error)
+}
+
 type Reconciler struct {
 	cfg      *config.Config
 	settings Settings
-	gh       *ghclient.Client
-	bumper   *pr.Bumper
+	gh       gitHubClient
+	bumper   Bumper
 }
 
 func New(cfg *config.Config, s Settings) (*Reconciler, error) {
@@ -51,12 +78,18 @@ func New(cfg *config.Config, s Settings) (*Reconciler, error) {
 		return nil, fmt.Errorf("GitHubToken is required")
 	}
 	gh := ghclient.NewClient(context.Background(), s.GitHubToken)
+	return newWithDeps(cfg, s, gh, pr.NewBumper(gh, s.GitHubToken)), nil
+}
+
+// newWithDeps wires a Reconciler with caller-supplied collaborators. Used by
+// tests that inject in-memory fakes; prod goes through New.
+func newWithDeps(cfg *config.Config, s Settings, gh gitHubClient, bumper Bumper) *Reconciler {
 	return &Reconciler{
 		cfg:      cfg,
 		settings: s,
 		gh:       gh,
-		bumper:   pr.NewBumper(gh, s.GitHubToken),
-	}, nil
+		bumper:   bumper,
+	}
 }
 
 // RunCron is the safety-net path. Walks every upstream looking for new

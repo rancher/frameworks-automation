@@ -1,0 +1,47 @@
+# Three-stage cascade triggered by an explicit wrangler bump. Each
+# intermediate stage opens a single bundled bump PR and parks on a tag
+# prompt; the final stage bumps the leaf with no tag prompt.
+#
+# Stage 1 PRs open immediately at cascade creation. Stages 2 and 3 are
+# planned but their bump versions stay empty until the prior stage's tag
+# arrives via the per-repo Release workflow.
+
+sources:
+  - {name: wrangler, version: v0.5.1, explicit: true}
+
+stages:
+  - layer: 1
+    bumps:
+      - repo: norman
+        branch: main
+        deps:
+          - {dep: wrangler, module: github.com/x/wrangler, version: v0.5.1}
+    tags:
+      - {repo: norman, branch: main}
+  - layer: 2
+    bumps:
+      - repo: steve
+        branch: main
+        deps:
+          - {dep: norman, module: github.com/x/norman, version: ""}
+    tags:
+      - {repo: steve, branch: main}
+  - layer: 3
+    bumps:
+      - repo: rancher
+        branch: main
+        deps:
+          - {dep: steve, module: github.com/x/steve, version: ""}
+    tags: []
+
+issue:
+  title: "[cascade] rancher main"
+  labels:
+    - cascade-op
+    - "leaf:rancher:main"
+
+prs_opened:
+  - repo: x/norman
+    base: main
+    modules:
+      - {path: github.com/x/wrangler, version: v0.5.1}
