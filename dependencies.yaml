@@ -42,35 +42,40 @@
 repos:
   rancher:
     kind: leaf
-    repo: tomleb/frameworks-automation-rancher
+    repo: rancher/rancher
+    fork: tomleb/rancher-rancher
     deps:
       - {name: steve}
-      - {name: webhook, strategy: bump-webhook}
-      - {name: wrangler}
-      - {name: chart, strategy: order}
-  chart:
-    kind: paired
-    repo: tomleb/frameworks-automation-chart
-    branch-template: "dev-{rancher-minor}"
-    deps:
-      - {name: webhook, strategy: chart-bump}
+      # - {name: webhook, strategy: bump-webhook}
+      # - {name: wrangler}
+      # - {name: chart, strategy: order}
+  # chart:
+  #   kind: paired
+  #   repo: rancher/charts
+  #   fork: tomleb/rancher-charts
+  #   branch-template: "dev-{rancher-minor}"
+  #   deps:
+  #     - {name: webhook, strategy: chart-bump}
   steve:
     kind: paired
-    repo: tomleb/frameworks-automation-steve
+    repo: rancher/steve
+    fork: tomleb/rancher-steve
     deps:
       - {name: wrangler}
-  webhook:
-    kind: paired
-    repo: tomleb/frameworks-automation-webhook
-    deps:
-      - {name: norman}
-  norman:
-    kind: paired
-    repo: tomleb/frameworks-automation-norman
-    deps:
-      - {name: wrangler}
+  # webhook:
+  #   kind: paired
+  #   repo: rancher/webhook
+  #   fork: tomleb/rancher-webhook
+  #   deps:
+  #     - {name: norman}
+  # norman:
+  #   kind: paired
+  #   repo: rancher/norman
+  #   fork: tomleb/rancher-norman
+  #   deps:
+  #     - {name: wrangler}
   wrangler:
     kind: independent
-    repo: tomleb/frameworks-automation-wrangler
-    fork: tomleb/frameworks-automation-wrangler
+    repo: rancher/wrangler
+    fork: tomleb/rancher-wrangler
     deps: []
