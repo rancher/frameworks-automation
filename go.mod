@@ -1,6 +1,6 @@
 module github.com/rancher/release-automation
 
-go 1.25.0
+go 1.26.2
 
 require (
 	github.com/google/go-github/v66 v66.0.0
