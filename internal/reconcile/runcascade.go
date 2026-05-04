@@ -36,7 +36,7 @@ import (
 //     open cascade on the same leaf with a different explicit-source set.
 //  5. Open stage 1 bump PRs; subsequent stages open as prior tags arrive
 //     (handled in passCascade).
-//  6. Persist state; run passes 2-4 so in-flight ops keep moving.
+//  6. Persist state; run later passes so in-flight ops keep moving.
 func (r *Reconciler) RunCascade(ctx context.Context, leafBranch string, independents map[string]string) error {
 	if leafBranch == "" {
 		return fmt.Errorf("leaf branch is required")
@@ -140,7 +140,7 @@ func (r *Reconciler) RunCascade(ctx context.Context, leafBranch string, independ
 			return fmt.Errorf("update cascade #%d body: %w", issue.Number, err)
 		}
 	}
-	return r.passes234(ctx)
+	return r.passesAfter1(ctx)
 }
 
 // supersedeCascade closes an existing cascade whose explicit-source set has

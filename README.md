@@ -39,7 +39,7 @@ internal/
   pr/                 # open + supersede bump PRs
   tracker/            # tracker-issue lifecycle
   slack/              # transition pings
-  reconcile/          # the 4-pass loop tying the above together
+  reconcile/          # the multi-pass loop tying the above together
 dependencies.yaml     # the DAG + paired/independent classification
 ```
 

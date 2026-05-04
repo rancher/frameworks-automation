@@ -63,7 +63,7 @@ which one. All modes serialize on a workflow-level concurrency lock
 
 | Mode              | Trigger                                       | Purpose                                                                  |
 | ----------------- | --------------------------------------------- | ------------------------------------------------------------------------ |
-| `cron`            | `schedule` (every ~15 min)                    | Discover new releases we didn't dispatch; poll PRs; refresh dashboards.  |
+| `cron`            | `schedule` (every ~15 min)                    | Discover new releases we didn't dispatch; poll PRs.                       |
 | `dispatch`        | `repository_dispatch` `tag-emitted`           | Fast path for a tag we just emitted (~30s end-to-end).                   |
 | `bump-dep`        | `workflow_dispatch` `bump-<dep>.yaml`         | Manual fan-out of one (dep, version) onto a chosen leaf branch.          |
 | `cascade`         | `workflow_dispatch` `cascade.yaml`            | Multi-source DAG walk to a leaf branch; prompts re-tag at each layer.    |
@@ -89,8 +89,7 @@ internal/
   pr/                  # bumper: clone, go get, commit, push, open PR
   tracker/             # bump-op tracker issues (one per (dep, version, leaf-branch))
   cascade/             # cascade tracker issues (one per (leaf-repo, leaf-branch))
-  dashboard/           # per-leaf-branch "in-flight" rollup issue
-  reconcile/           # the four-pass loop tying everything together
+  reconcile/           # the multi-pass loop tying everything together
 .github/workflows/
   reconciler.yaml           # cron entry
   tag-emitted.yaml          # dispatch entry
@@ -216,32 +215,28 @@ Two state machines, two issue flavors:
 | **bump-op**   | `(dep, version, leaf-branch)` | `bump-op`, `dep:<name>`, `version:<v>`, `leaf:<repo>:<branch>` | by label set                 |
 | **cascade**   | `(leaf-repo, leaf-branch)` | `cascade-op`, `leaf:<repo>:<branch>`                | by leaf label; supersede on explicit-source change |
 
-A separate dashboard issue per leaf-branch is regenerated each tick from
-both flavors — it has no embedded state.
-
 ## Reconciliation passes
 
-The four passes that run during a `cron` sweep:
+The passes that run during a `cron` sweep:
 
 ```mermaid
 flowchart TB
     p1["pass 1<br/>discover new tags<br/>open bump-op trackers"]
     p2["pass 2<br/>poll open bump-op PRs<br/>update state, close on completion"]
     pC["passCascade<br/>poll cascade PRs<br/>advance stage, open next"]
-    p4["pass 4<br/>regenerate per-leaf dashboards"]
-    p1 --> p2 --> pC --> p4
+    p1 --> p2 --> pC
 ```
 
 `dispatch` and `bump-dep` modes run a single pass-1 iteration scoped to one
-(dep, version), then run passes 2-4 to keep in-flight ops moving:
+(dep, version), then run the remaining passes to keep in-flight ops moving:
 
 ```go
 case "dispatch":
-    r.RunDispatch(ctx, DispatchEvent{Repo, Tag, SHA})  // pass1Dispatch + 2..4
+    r.RunDispatch(ctx, DispatchEvent{Repo, Tag, SHA})  // pass1Dispatch + remaining
 case "bump-dep":
-    r.RunBumpDep(ctx, dep, version, leafBranch)       // runBump + 2..4
+    r.RunBumpDep(ctx, dep, version, leafBranch)       // runBump + remaining
 case "cascade":
-    r.RunCascade(ctx, leafBranch, independents)       // creates/finds cascade issue + 2..4
+    r.RunCascade(ctx, leafBranch, independents)       // creates/finds cascade issue + remaining
 ```
 
 ### Pass 1 — discover new releases
@@ -272,12 +267,6 @@ Symmetric to pass 2 but for cascade trackers: poll the current stage's
 bump PRs, fold tagged versions into later stages' deps, dispatch the next
 layer's bumps when a stage clears, close the cascade when the final stage
 merges. Detail in [Cascade flow](#cascade-flow) below.
-
-### Pass 4 — regenerate dashboards
-
-For every leaf branch, query open bump-op trackers and cascades carrying
-the matching `leaf:<repo>:<branch>` label, render a rollup table, overwrite
-the dashboard issue body. Read-only; no state persisted in the dashboard.
 
 ## The Reconciler
 
@@ -335,7 +324,7 @@ sequenceDiagram
         end
         rec->>slack: post "PRs opened" + persist ts
     end
-    rec->>rec: passes 2..4
+    rec->>rec: remaining passes
 ```
 
 A bump-op tracker is **identity by `(dep, version, leaf-branch)`**. When a
@@ -495,9 +484,8 @@ Slack.
 - **New paired component**: add the row, no workflow plumbing — pass 1
   picks it up on the next cron tick and the cascade picks it up as
   paired-latest.
-- **New leaf**: extend `cfg.LeafRepos()`. The dashboard loop is already
-  written for N leaves; pass 1 cron currently assumes a single rancher
-  leaf and will need a tweak.
+- **New leaf**: extend `cfg.LeafRepos()`. Pass 1 cron currently assumes a
+  single rancher leaf and will need a tweak.
 - **New bump strategy**: add a `config.Strategy` constant + register an
   implementation of `pr.Strategy` in `internal/pr/strategy.go`'s
   `strategies` map, then validate it via `config.knownStrategy`. Strategies

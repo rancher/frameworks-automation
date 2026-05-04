@@ -152,7 +152,7 @@ func Labels(leafRepo, leafBranch string) []string {
 	}
 }
 
-// LeafLabel is the leaf-axis label used by the dashboard.
+// LeafLabel returns the leaf-axis label for a (leafRepo, leafBranch).
 func LeafLabel(leafRepo, leafBranch string) string {
 	return fmt.Sprintf(LabelLeafFmt, leafRepo, leafBranch)
 }

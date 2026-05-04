@@ -25,7 +25,7 @@ import (
 //  5. Open one bump PR per target if not already linked.
 //  6. Re-render the tracker body.
 //
-// Caller owns the surrounding lifecycle (e.g. running passes 2-4 after).
+// Caller owns the surrounding lifecycle (e.g. running later passes after).
 func (r *Reconciler) runBump(ctx context.Context, dep, version, leafBranch string) error {
 	if leafBranch == "" {
 		return fmt.Errorf("runBump: leafBranch is required")

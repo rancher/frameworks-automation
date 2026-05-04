@@ -41,5 +41,5 @@ func (r *Reconciler) RunBumpDep(ctx context.Context, dep, version, leafBranch st
 	if err := r.runBump(ctx, dep, version, leafBranch); err != nil {
 		return err
 	}
-	return r.passes234(ctx)
+	return r.passesAfter1(ctx)
 }

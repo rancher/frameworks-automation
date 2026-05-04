@@ -4,9 +4,9 @@
 //
 // Mode selects the entry path:
 //
-//	-mode=cron      Full sweep: passes 1-4 over every upstream/downstream pair.
+//	-mode=cron      Full sweep over every upstream/downstream pair.
 //	-mode=dispatch  Scoped to a single just-emitted tag. Skips the upstream
-//	                discovery (passes 2-4 still run for completeness).
+//	                discovery (later passes still run for completeness).
 //	-mode=bump-dep  Manual fan-out of one (dep, version) across every repo
 //	                that ships against a chosen leaf branch — used for the
 //	                independent-lib release/* case where the auto path

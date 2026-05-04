@@ -78,10 +78,9 @@ func (r *Reconciler) advanceCascade(ctx context.Context, issue *ghclient.Issue) 
 		}
 	}
 
-	// Always rewrite the body — same pattern as pass4 dashboards. The body is
-	// a regenerated view (Last reconciled timestamp, render-only fixes), so
-	// gating on state mutation strands cosmetic changes until the next real
-	// transition.
+	// Always rewrite the body. It's a regenerated view (Last reconciled
+	// timestamp, render-only fixes), so gating on state mutation would
+	// strand cosmetic changes until the next real transition.
 	if err := cascade.UpdateBody(ctx, r.gh, r.settings.AutomationRepo, issue.Number, op); err != nil {
 		return fmt.Errorf("update body: %w", err)
 	}

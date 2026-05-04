@@ -179,8 +179,7 @@ func validateBranchTemplate(tpl string) error {
 }
 
 // LeafRepos returns the keys of every repo with kind=leaf, sorted for
-// stable iteration. Pilot 1 has exactly one (rancher), but the dashboard
-// loop is written to handle N.
+// stable iteration.
 func (c *Config) LeafRepos() []string {
 	var out []string
 	for name, r := range c.Repos {

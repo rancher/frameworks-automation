@@ -78,9 +78,9 @@ func Title(dep, version, leafRepo, leafBranch string) string {
 
 // Labels returns the canonical label set for a tracker. The version is NOT a
 // label (it would proliferate one new label per release); it lives in the
-// title and is parsed by ParseVersionFromTitle. The leaf label IS used so
-// that one tracker per (dep, version, leaf-branch) is queryable directly —
-// proliferation here is bounded by leaf branches (a handful).
+// title and is parsed by ParseVersionFromTitle. The leaf label tags each
+// tracker with its (leafRepo, leafBranch) for human discovery in the GitHub
+// issue list — proliferation is bounded by leaf branches (a handful).
 func Labels(dep, leafRepo, leafBranch string) []string {
 	return []string{
 		LabelOp,
@@ -89,8 +89,7 @@ func Labels(dep, leafRepo, leafBranch string) []string {
 	}
 }
 
-// LeafLabel is the single leaf-axis label, used by the dashboard to query
-// trackers landing on a specific (leafRepo, leafBranch) without filtering.
+// LeafLabel returns the single leaf-axis label for a (leafRepo, leafBranch).
 func LeafLabel(leafRepo, leafBranch string) string {
 	return fmt.Sprintf(LabelLeafFmt, leafRepo, leafBranch)
 }

@@ -4,7 +4,6 @@ name: Reconciler (cron)
 #   - upstream lib releases we don't dispatch (wrangler, lasso, ...)
 #   - PR-state transitions (approval, CI flip, merge) on every open tracker
 #   - drift on notify-only branches
-#   - dashboard re-render
 #
 # The fast path for tags we control is .github/workflows/tag-emitted.yaml,
 # which runs within ~30s of a tag landing.
