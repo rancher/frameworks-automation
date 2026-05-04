@@ -51,36 +51,47 @@ repos:
       | release/v2.14  | v2.14         |
       | release/v2.13  | v2.13         |
       | release/v2.12  | v2.12         |
+      | release/v2.11  | v2.11         |
+      | release/v2.10  | v2.10         |
     deps:
       - {name: steve}
-      # - {name: webhook, strategy: bump-webhook}
-      # - {name: wrangler}
-      # - {name: chart, strategy: order}
-  # chart:
-  #   kind: paired
-  #   repo: rancher/charts
-  #   fork: tomleb/rancher-charts
-  #   branch-template: "dev-{rancher-minor}"
-  #   deps:
-  #     - {name: webhook, strategy: chart-bump}
+      - {name: webhook, strategy: bump-webhook}
+      - {name: wrangler}
+      - {name: chart, strategy: order}
+  chart:
+    kind: paired
+    repo: rancher/charts
+    fork: tomleb/rancher-charts
+    branch-template: "dev-{rancher-minor}"
+    deps:
+      - {name: webhook, strategy: chart-bump}
   steve:
     kind: paired
     repo: rancher/steve
     fork: tomleb/rancher-steve
     deps:
+      - {name: apiserver}
+      - {name: norman}
       - {name: wrangler}
-  # webhook:
-  #   kind: paired
-  #   repo: rancher/webhook
-  #   fork: tomleb/rancher-webhook
-  #   deps:
-  #     - {name: norman}
-  # norman:
-  #   kind: paired
-  #   repo: rancher/norman
-  #   fork: tomleb/rancher-norman
-  #   deps:
-  #     - {name: wrangler}
+  webhook:
+    kind: paired
+    repo: rancher/webhook
+    fork: tomleb/rancher-webhook
+    deps:
+      - {name: norman}
+      - {name: wrangler}
+  apiserver:
+    kind: paired
+    repo: rancher/apiserver
+    fork: tomleb/rancher-apiserver
+    deps:
+      - {name: wrangler}
+  norman:
+    kind: paired
+    repo: rancher/norman
+    fork: tomleb/rancher-norman
+    deps:
+      - {name: wrangler}
   wrangler:
     kind: independent
     repo: rancher/wrangler
