@@ -98,6 +98,13 @@ func (r *Reconciler) deriveLeafBranchForDispatch(ctx context.Context, dep, versi
 
 func (r *Reconciler) fetchVersionTable(ctx context.Context, repoKey string) (*config.VersionTable, error) {
 	repo := r.cfg.Repos[repoKey]
+	if repo.VersionMD != "" {
+		tbl, err := config.ParseVersionTable(repo.VersionMD)
+		if err != nil {
+			return nil, fmt.Errorf("parse inline version-md for %s: %w", repoKey, err)
+		}
+		return tbl, nil
+	}
 	ghRepo, err := repo.GitHubRepo()
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", repoKey, err)

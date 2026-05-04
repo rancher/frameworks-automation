@@ -57,7 +57,12 @@ type Repo struct {
 	// repos whose branches follow a fixed naming scheme rather than a
 	// VERSION.md table (e.g. the Rancher chart's "dev-v2.16" branches).
 	BranchTemplate string `yaml:"branch-template,omitempty"`
-	Deps           []Dep  `yaml:"deps"`
+	// VersionMD, when set, supplies the VERSION.md table inline rather
+	// than fetching it from the repo's default branch. Same markdown
+	// format as the file. Used for repos that don't ship a VERSION.md
+	// (notably rancher itself).
+	VersionMD string `yaml:"version-md,omitempty"`
+	Deps      []Dep  `yaml:"deps"`
 }
 
 // GitHubRepo returns the GitHub owner/name for this repo.
@@ -126,6 +131,11 @@ func (c *Config) validate() error {
 			}
 			if err := validateBranchTemplate(r.BranchTemplate); err != nil {
 				return fmt.Errorf("repo %q: %w", name, err)
+			}
+		}
+		if r.VersionMD != "" {
+			if _, err := ParseVersionTable(r.VersionMD); err != nil {
+				return fmt.Errorf("repo %q: version-md: %w", name, err)
 			}
 		}
 		seen := make(map[string]bool, len(r.Deps))
