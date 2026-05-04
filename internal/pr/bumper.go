@@ -41,6 +41,10 @@ type Request struct {
 	BaseBranch string   // e.g. "main", "release/v2.13"
 	HeadBranch string   // e.g. "automation/bump-steve-v0.7.5"
 	Modules    []Module // one or more (path, version) pairs to bump
+	// Fork, when non-empty, is the "owner/name" of a fork to push the head
+	// branch to. The PR is still opened against Repo (cross-repo PR). When
+	// empty, head is pushed to origin (Repo itself) as before.
+	Fork string
 	// TrackerURL is included in the PR body so reviewers can find the op.
 	TrackerURL string
 	// Assignees lists GitHub logins to assign to the opened PR.
@@ -153,14 +157,26 @@ func (b *Bumper) Open(ctx context.Context, req Request) (*Result, error) {
 	if err := run(ctx, repoDir, nil, "git", "commit", "-m", commitMessage(req.Modules)); err != nil {
 		return nil, err
 	}
-	if err := run(ctx, repoDir, nil, "git", "push", "-u", "origin", req.HeadBranch); err != nil {
-		return nil, err
+
+	pushRemote := "origin"
+	prHead := req.HeadBranch
+	if req.Fork != "" {
+		forkURL := fmt.Sprintf("https://x-access-token:%s@github.com/%s.git", b.token, req.Fork)
+		if err := run(ctx, repoDir, nil, "git", "remote", "add", "fork", forkURL); err != nil {
+			return nil, scrubToken(err, b.token)
+		}
+		pushRemote = "fork"
+		forkOwner := strings.SplitN(req.Fork, "/", 2)[0]
+		prHead = forkOwner + ":" + req.HeadBranch
+	}
+	if err := run(ctx, repoDir, nil, "git", "push", "-u", pushRemote, req.HeadBranch); err != nil {
+		return nil, scrubToken(err, b.token)
 	}
 
 	pr, err := b.gh.CreatePR(ctx, req.Repo,
 		title,
 		buildPRBody(req),
-		req.HeadBranch,
+		prHead,
 		req.BaseBranch,
 	)
 	if err != nil {
@@ -175,7 +191,15 @@ func (b *Bumper) Open(ctx context.Context, req Request) (*Result, error) {
 }
 
 func (b *Bumper) findExistingPR(ctx context.Context, req Request) (*ghclient.PR, error) {
-	prs, err := b.gh.ListOpenPRsByHead(ctx, req.Repo, req.HeadBranch)
+	head := req.HeadBranch
+	if req.Fork != "" {
+		forkOwner := strings.SplitN(req.Fork, "/", 2)[0]
+		head = forkOwner + ":" + req.HeadBranch
+	} else {
+		repoOwner := strings.SplitN(req.Repo, "/", 2)[0]
+		head = repoOwner + ":" + req.HeadBranch
+	}
+	prs, err := b.gh.ListOpenPRsByHead(ctx, req.Repo, head)
 	if err != nil {
 		return nil, err
 	}

@@ -206,6 +206,7 @@ func (r *Reconciler) openCascadeStageBumps(ctx context.Context, op *cascade.Op, 
 		}
 		req := pr.Request{
 			Repo:       downstreamGH,
+			Fork:       downstream.Fork,
 			BaseBranch: bp.Branch,
 			HeadBranch: cascadeBumpBranchName(issueNum, bp.Repo, bp.Branch),
 			Modules:    bumpModules(bp),
@@ -558,12 +559,7 @@ func (r *Reconciler) detectStalePairedRepos(
 	leafMinor string,
 	pairedTables map[string]*config.VersionTable,
 ) (map[string]bool, error) {
-	moduleToRepo := map[string]string{}
-	for name, repo := range r.cfg.Repos {
-		if repo.Module != "" {
-			moduleToRepo[repo.Module] = name
-		}
-	}
+	moduleToRepo := r.cfg.ModuleToRepo()
 
 	stale := map[string]bool{}
 	// queue maps repo name → the tag version to compare its branch against.

@@ -30,8 +30,7 @@ func (r *Reconciler) runBump(ctx context.Context, dep, version, leafBranch strin
 	if leafBranch == "" {
 		return fmt.Errorf("runBump: leafBranch is required")
 	}
-	depRepo, ok := r.cfg.Repos[dep]
-	if !ok {
+	if _, ok := r.cfg.Repos[dep]; !ok {
 		return fmt.Errorf("runBump: dep %q not in config", dep)
 	}
 
@@ -90,9 +89,11 @@ func (r *Reconciler) runBump(ctx context.Context, dep, version, leafBranch strin
 		return fmt.Errorf("supersede older trackers for %s on %s %s: %w", dep, leafRepo, leafBranch, err)
 	}
 
+	depModule := r.cfg.FirstModulePath(dep)
+
 	mutated := false
 	for i := range op.Targets {
-		changed, err := r.bumpTarget(ctx, dep, version, leafBranch, depRepo.Module, issue.URL, &op.Targets[i])
+		changed, err := r.bumpTarget(ctx, dep, version, leafBranch, depModule, issue.URL, &op.Targets[i])
 		if err != nil {
 			return err
 		}
@@ -128,6 +129,7 @@ func (r *Reconciler) bumpTarget(ctx context.Context, dep, version, leafBranch, d
 	}
 	req := pr.Request{
 		Repo:       downstreamGH,
+		Fork:       downstream.Fork,
 		BaseBranch: target.Branch,
 		HeadBranch: bumpBranchName(dep, version, leafBranch),
 		Modules:    []pr.Module{{Path: depModule, Version: version, Strategy: downstream.DepStrategy(dep)}},

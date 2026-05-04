@@ -32,6 +32,7 @@ import (
 	"strings"
 
 	"github.com/rancher/release-automation/internal/config"
+	ghclient "github.com/rancher/release-automation/internal/github"
 	"github.com/rancher/release-automation/internal/reconcile"
 )
 
@@ -61,12 +62,18 @@ func main() {
 		return
 	}
 
-	r, err := reconcile.New(cfg, envSettings())
+	settings := envSettings()
+	ctx := context.Background()
+	gh := ghclient.NewClient(ctx, settings.GitHubToken)
+	if err := cfg.DiscoverModules(ctx, gh); err != nil {
+		log.Fatalf("discover modules: %v", err)
+	}
+
+	r, err := reconcile.New(cfg, settings)
 	if err != nil {
 		log.Fatalf("init reconciler: %v", err)
 	}
 
-	ctx := context.Background()
 	switch *mode {
 	case "cron":
 		if err := r.RunCron(ctx); err != nil {

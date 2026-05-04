@@ -235,23 +235,24 @@ func (c *Client) GetPR(ctx context.Context, repo string, number int) (*PR, error
 	return toPR(pr), nil
 }
 
-// ListOpenPRsByHead returns OPEN PRs in `repo` whose head branch is `headRef`.
+// ListOpenPRsByHead returns OPEN PRs in `repo` whose head matches `head`.
 // Used to dedupe: if a bump branch already has an open PR, don't open another.
 //
-// `headRef` is just the branch name (no owner: prefix) — we always push to
-// the same repo, so head is the bot's branch in `repo` itself.
-func (c *Client) ListOpenPRsByHead(ctx context.Context, repo, headRef string) ([]*PR, error) {
+// `head` must be qualified as "owner:branch". For same-repo bumps, pass
+// "<repo-owner>:<branch>". For cross-repo (fork) bumps, pass
+// "<fork-owner>:<branch>" so the GitHub API matches the fork head.
+func (c *Client) ListOpenPRsByHead(ctx context.Context, repo, head string) ([]*PR, error) {
 	owner, name, err := splitRepo(repo)
 	if err != nil {
 		return nil, err
 	}
 	prs, _, err := c.gh.PullRequests.List(ctx, owner, name, &gh.PullRequestListOptions{
-		State: "open",
-		Head:  owner + ":" + headRef,
+		State:       "open",
+		Head:        head,
 		ListOptions: gh.ListOptions{PerPage: 50},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("list PRs %s head=%s: %w", repo, headRef, err)
+		return nil, fmt.Errorf("list PRs %s head=%s: %w", repo, head, err)
 	}
 	out := make([]*PR, 0, len(prs))
 	for _, p := range prs {
@@ -322,6 +323,36 @@ func (c *Client) ClosePR(ctx context.Context, repo string, number int, comment s
 		return fmt.Errorf("close PR %s#%d: %w", repo, number, err)
 	}
 	return nil
+}
+
+// GetGoModPaths returns every go.mod path in repo's default branch tree,
+// excluding files under any vendor/ directory. Used by config.DiscoverModules
+// to populate the module-path index without a local clone.
+func (c *Client) GetGoModPaths(ctx context.Context, repo string) ([]string, error) {
+	owner, name, err := splitRepo(repo)
+	if err != nil {
+		return nil, err
+	}
+	tree, _, err := c.gh.Git.GetTree(ctx, owner, name, "HEAD", true)
+	if err != nil {
+		return nil, fmt.Errorf("get tree %s: %w", repo, err)
+	}
+	var out []string
+	for _, e := range tree.Entries {
+		path := e.GetPath()
+		if e.GetType() != "blob" {
+			continue
+		}
+		if path != "go.mod" && !strings.HasSuffix(path, "/go.mod") {
+			continue
+		}
+		// Skip vendor directories.
+		if strings.Contains(path, "/vendor/") || strings.HasPrefix(path, "vendor/") {
+			continue
+		}
+		out = append(out, path)
+	}
+	return out, nil
 }
 
 // --- helpers ----------------------------------------------------------------

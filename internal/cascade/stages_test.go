@@ -10,9 +10,14 @@ import (
 func newCfg() *config.Config {
 	return &config.Config{
 		Repos: map[string]config.Repo{
-			"rancher":  {Kind: config.KindLeaf, Module: "github.com/x/rancher", Deps: deps("steve", "wrangler")},
-			"steve":    {Kind: config.KindPaired, Module: "github.com/x/steve", Deps: deps("wrangler")},
-			"wrangler": {Kind: config.KindIndependent, Module: "github.com/x/wrangler"},
+			"rancher":  {Kind: config.KindLeaf, Repo: "x/rancher", Deps: deps("steve", "wrangler")},
+			"steve":    {Kind: config.KindPaired, Repo: "x/steve", Deps: deps("wrangler")},
+			"wrangler": {Kind: config.KindIndependent, Repo: "x/wrangler"},
+		},
+		Modules: map[string][]string{
+			"rancher":  {"github.com/x/rancher"},
+			"steve":    {"github.com/x/steve"},
+			"wrangler": {"github.com/x/wrangler"},
 		},
 	}
 }
@@ -137,8 +142,8 @@ func TestComputeStages_DirectLeafDepOnly(t *testing.T) {
 	// rancher → wrangler directly, no intermediate. Cascade is one stage.
 	cfg := &config.Config{
 		Repos: map[string]config.Repo{
-			"rancher":  {Kind: config.KindLeaf, Module: "github.com/x/rancher", Deps: deps("wrangler")},
-			"wrangler": {Kind: config.KindIndependent, Module: "github.com/x/wrangler"},
+			"rancher":  {Kind: config.KindLeaf, Repo: "x/rancher", Deps: deps("wrangler")},
+			"wrangler": {Kind: config.KindIndependent, Repo: "x/wrangler"},
 		},
 	}
 	_, stages, err := ComputeStages(cfg,
@@ -167,10 +172,10 @@ func TestComputeStages_FanInDAG(t *testing.T) {
 	// dep so each layer CIs against the new dep explicitly).
 	cfg := &config.Config{
 		Repos: map[string]config.Repo{
-			"A": {Kind: config.KindLeaf, Module: "github.com/x/a", Deps: deps("B", "C", "D")},
-			"B": {Kind: config.KindIndependent, Module: "github.com/x/b", Deps: deps("D")},
-			"C": {Kind: config.KindIndependent, Module: "github.com/x/c", Deps: deps("D")},
-			"D": {Kind: config.KindIndependent, Module: "github.com/x/d"},
+			"A": {Kind: config.KindLeaf, Repo: "x/a", Deps: deps("B", "C", "D")},
+			"B": {Kind: config.KindIndependent, Repo: "x/b", Deps: deps("D")},
+			"C": {Kind: config.KindIndependent, Repo: "x/c", Deps: deps("D")},
+			"D": {Kind: config.KindIndependent, Repo: "x/d"},
 		},
 	}
 	aTable := &config.VersionTable{Rows: []config.VersionRow{{Branch: "main", Minor: "v1"}}}
@@ -266,10 +271,10 @@ func TestComputeStages_PairedLatestAlongsideExplicit(t *testing.T) {
 	// webhook (paired-latest pinned now).
 	cfg := &config.Config{
 		Repos: map[string]config.Repo{
-			"rancher":  {Kind: config.KindLeaf, Module: "github.com/x/rancher", Deps: deps("steve", "wrangler", "webhook")},
-			"steve":    {Kind: config.KindPaired, Module: "github.com/x/steve", Deps: deps("wrangler")},
-			"webhook":  {Kind: config.KindPaired, Module: "github.com/x/webhook"},
-			"wrangler": {Kind: config.KindIndependent, Module: "github.com/x/wrangler"},
+			"rancher":  {Kind: config.KindLeaf, Repo: "x/rancher", Deps: deps("steve", "wrangler", "webhook")},
+			"steve":    {Kind: config.KindPaired, Repo: "x/steve", Deps: deps("wrangler")},
+			"webhook":  {Kind: config.KindPaired, Repo: "x/webhook"},
+			"wrangler": {Kind: config.KindIndependent, Repo: "x/wrangler"},
 		},
 	}
 	webhookTable := &config.VersionTable{Rows: []config.VersionRow{
@@ -330,9 +335,9 @@ func TestComputeStages_NoPathToLeafSkipsExplicit(t *testing.T) {
 	// either, there's nothing to bump and ComputeStages errors.
 	cfg := &config.Config{
 		Repos: map[string]config.Repo{
-			"rancher":  {Kind: config.KindLeaf, Module: "github.com/x/rancher", Deps: deps("steve")},
-			"steve":    {Kind: config.KindPaired, Module: "github.com/x/steve"}, // doesn't depend on wrangler
-			"wrangler": {Kind: config.KindIndependent, Module: "github.com/x/wrangler"},
+			"rancher":  {Kind: config.KindLeaf, Repo: "x/rancher", Deps: deps("steve")},
+			"steve":    {Kind: config.KindPaired, Repo: "x/steve"}, // doesn't depend on wrangler
+			"wrangler": {Kind: config.KindIndependent, Repo: "x/wrangler"},
 		},
 	}
 	steveTbl := &config.VersionTable{Rows: []config.VersionRow{{Branch: "main", Minor: "v0.9", Pair: "v2.15"}}}
@@ -437,17 +442,25 @@ func TestComputeStages_LeafBranchNotInTable(t *testing.T) {
 // Both rancher and chart consume webhook with non-go-get strategies; chart
 // has no Go module and uses a branch-template instead of VERSION.md.
 func chartLikeCfg() *config.Config {
-	return &config.Config{Repos: map[string]config.Repo{
-		"rancher": {Kind: config.KindLeaf, Module: "github.com/x/rancher", Deps: []config.Dep{
-			{Name: "webhook", Strategy: config.StrategyBumpWebhook},
-			{Name: "chart", Strategy: config.StrategyOrder},
-		}},
-		"chart": {Kind: config.KindPaired, Module: "github.com/x/chart",
-			BranchTemplate: "dev-{rancher-minor}",
-			Deps:           []config.Dep{{Name: "webhook", Strategy: config.StrategyChartBump}}},
-		"webhook":  {Kind: config.KindPaired, Module: "github.com/x/webhook", Deps: deps("wrangler")},
-		"wrangler": {Kind: config.KindIndependent, Module: "github.com/x/wrangler"},
-	}}
+	return &config.Config{
+		Repos: map[string]config.Repo{
+			"rancher": {Kind: config.KindLeaf, Repo: "x/rancher", Deps: []config.Dep{
+				{Name: "webhook", Strategy: config.StrategyBumpWebhook},
+				{Name: "chart", Strategy: config.StrategyOrder},
+			}},
+			"chart": {Kind: config.KindPaired, Repo: "x/chart",
+				BranchTemplate: "dev-{rancher-minor}",
+				Deps:           []config.Dep{{Name: "webhook", Strategy: config.StrategyChartBump}}},
+			"webhook":  {Kind: config.KindPaired, Repo: "x/webhook", Deps: deps("wrangler")},
+			"wrangler": {Kind: config.KindIndependent, Repo: "x/wrangler"},
+		},
+		Modules: map[string][]string{
+			"rancher":  {"github.com/x/rancher"},
+			"chart":    {"github.com/x/chart"},
+			"webhook":  {"github.com/x/webhook"},
+			"wrangler": {"github.com/x/wrangler"},
+		},
+	}
 }
 
 func TestComputeStages_OrderEdgeSequencesChartBeforeRancher(t *testing.T) {

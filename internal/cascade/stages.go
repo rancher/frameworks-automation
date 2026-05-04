@@ -180,18 +180,18 @@ func ComputeStages(
 			switch {
 			case explicitSet[d.Name]:
 				bundleByRepo[repo] = append(bundleByRepo[repo], stageDep{
-					Dep: d.Name, Module: depCfg.Module, Version: independents[d.Name], Strategy: d.Strategy,
+					Dep: d.Name, Module: cfg.FirstModulePath(d.Name), Version: independents[d.Name], Strategy: d.Strategy,
 				})
 			case propagation[d.Name]:
 				bundleByRepo[repo] = append(bundleByRepo[repo], stageDep{
-					Dep: d.Name, Module: depCfg.Module, Strategy: d.Strategy,
+					Dep: d.Name, Module: cfg.FirstModulePath(d.Name), Strategy: d.Strategy,
 				})
 			case depCfg.Kind == config.KindPaired:
 				if err := addPairedLatest(d.Name); err != nil {
 					return nil, nil, err
 				}
 				bundleByRepo[repo] = append(bundleByRepo[repo], stageDep{
-					Dep: d.Name, Module: depCfg.Module, Version: pairedLatest[d.Name], Strategy: d.Strategy,
+					Dep: d.Name, Module: cfg.FirstModulePath(d.Name), Version: pairedLatest[d.Name], Strategy: d.Strategy,
 				})
 			default:
 				// Independent not in user input → out of scope. Skip.

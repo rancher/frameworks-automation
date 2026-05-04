@@ -5,11 +5,14 @@ package config
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 )
+
+var repoFormat = regexp.MustCompile(`^[^/]+/[^/]+$`)
 
 type Kind string
 
@@ -41,8 +44,13 @@ type Dep struct {
 }
 
 type Repo struct {
-	Kind   Kind   `yaml:"kind"`
-	Module string `yaml:"module"`
+	Kind Kind `yaml:"kind"`
+	// Repo is the GitHub owner/name identity (e.g. "rancher/wrangler"). Used
+	// for all clone/PR/API operations.
+	Repo string `yaml:"repo"`
+	// Fork, when set, causes bump branches to be pushed to this fork and PRs
+	// opened as cross-repo PRs (head = "<fork-owner>:<branch>", base on Repo).
+	Fork string `yaml:"fork,omitempty"`
 	// BranchTemplate, when set on a paired repo, replaces the VERSION.md
 	// branch-resolution path. Only "{rancher-minor}" is recognized — it's
 	// filled from the leaf rancher branch's own VERSION.md row. Used for
@@ -52,8 +60,19 @@ type Repo struct {
 	Deps           []Dep  `yaml:"deps"`
 }
 
+// GitHubRepo returns the GitHub owner/name for this repo.
+func (r Repo) GitHubRepo() (string, error) {
+	if r.Repo == "" {
+		return "", fmt.Errorf("repo field is not set")
+	}
+	return r.Repo, nil
+}
+
 type Config struct {
 	Repos map[string]Repo `yaml:"repos"`
+	// Modules maps repo config key → Go module paths published by that repo.
+	// Populated by DiscoverModules; empty until that call completes.
+	Modules map[string][]string
 }
 
 func Load(path string) (*Config, error) {
@@ -92,8 +111,14 @@ func (c *Config) validate() error {
 		default:
 			return fmt.Errorf("repo %q: invalid kind %q", name, r.Kind)
 		}
-		if r.Module == "" {
-			return fmt.Errorf("repo %q: module is required", name)
+		if r.Repo == "" {
+			return fmt.Errorf("repo %q: repo is required", name)
+		}
+		if !repoFormat.MatchString(r.Repo) {
+			return fmt.Errorf("repo %q: repo %q must be owner/name", name, r.Repo)
+		}
+		if r.Fork != "" && !repoFormat.MatchString(r.Fork) {
+			return fmt.Errorf("repo %q: fork %q must be owner/name", name, r.Fork)
 		}
 		if r.BranchTemplate != "" {
 			if r.Kind != KindPaired {
@@ -216,32 +241,36 @@ func (r Repo) ResolveBranch(leafRancherMinor string, pairedTable *VersionTable) 
 	return pairedTable.BranchForPair(leafRancherMinor), nil
 }
 
-// GitHubRepo derives "owner/name" from the module path, assuming a
-// github.com/owner/name layout. Errors for non-GitHub modules.
-func (r Repo) GitHubRepo() (string, error) {
-	const prefix = "github.com/"
-	if !strings.HasPrefix(r.Module, prefix) {
-		return "", fmt.Errorf("module %q is not on github.com", r.Module)
-	}
-	parts := strings.SplitN(strings.TrimPrefix(r.Module, prefix), "/", 3)
-	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
-		return "", fmt.Errorf("module %q: expected github.com/owner/name", r.Module)
-	}
-	return parts[0] + "/" + parts[1], nil
-}
-
 // ResolveDep returns the config key for the repo at github "owner/name".
 // Used to translate a repository_dispatch payload (which carries the full
 // GitHub identity) back to the short name used as a config key.
 func (c *Config) ResolveDep(ghRepo string) (string, error) {
 	for name, r := range c.Repos {
-		gh, err := r.GitHubRepo()
-		if err != nil {
-			continue
-		}
-		if gh == ghRepo {
+		if r.Repo == ghRepo {
 			return name, nil
 		}
 	}
 	return "", fmt.Errorf("repo %q not in dependencies.yaml", ghRepo)
+}
+
+// FirstModulePath returns the first Go module path known for the repo with
+// the given config key. Returns "" when no modules have been discovered yet
+// or the repo publishes no Go modules.
+func (c *Config) FirstModulePath(repoName string) string {
+	if paths := c.Modules[repoName]; len(paths) > 0 {
+		return paths[0]
+	}
+	return ""
+}
+
+// ModuleToRepo builds a reverse index from Go module path → config key,
+// using the runtime-discovered module map.
+func (c *Config) ModuleToRepo() map[string]string {
+	out := make(map[string]string)
+	for name, paths := range c.Modules {
+		for _, p := range paths {
+			out[p] = name
+		}
+	}
+	return out
 }
