@@ -473,7 +473,7 @@ func (r *Reconciler) fillTagPromptHints(
 			if err != nil {
 				return fmt.Errorf("repo %s: %w", tg.Repo, err)
 			}
-			tg.WorkflowURL = fmt.Sprintf("https://github.com/%s/actions/workflows/release.yaml", ghRepo)
+			tg.WorkflowURL = fmt.Sprintf("https://github.com/%s/actions/workflows/cut-release.yaml", ghRepo)
 
 			minor := minorForRepoBranch(tg.Repo, tg.Branch, leafTable, dependentTables)
 			if minor == "" {
