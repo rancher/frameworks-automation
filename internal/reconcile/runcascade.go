@@ -562,19 +562,18 @@ func (r *Reconciler) detectStalePairedRepos(
 	moduleToRepo := r.cfg.ModuleToRepo()
 
 	stale := map[string]bool{}
-	// queue maps repo name → the tag version to compare its branch against.
-	queue := map[string]string{}
+	queue := map[string]bool{}
 	for _, src := range sources {
 		if !src.Explicit {
-			queue[src.Name] = src.Version
+			queue[src.Name] = true
 		}
 	}
 
 	checked := map[string]bool{}
 	for len(queue) > 0 {
-		var name, version string
-		for n, v := range queue {
-			name, version = n, v
+		var name string
+		for n := range queue {
+			name = n
 			break
 		}
 		delete(queue, name)
@@ -597,20 +596,32 @@ func (r *Reconciler) detectStalePairedRepos(
 			continue
 		}
 
-		ahead, err := r.gh.CommitsAheadOf(ctx, ghRepo, version, branch)
+		// Baseline is the dep's own latest release tag — never an upstream's
+		// go.mod pin. The pin lags real releases, so it would false-positive
+		// any dep that has tagged since the upstream's last release.
+		latestTag, err := r.resolveLatestForBranch(ctx, name, branch)
+		if err != nil {
+			log.Printf("cascade stale: %s resolve latest tag on %s: %v", name, branch, err)
+			continue
+		}
+		if latestTag == "" {
+			log.Printf("cascade stale: %s has no released tag on %s — skipping", name, branch)
+			continue
+		}
+
+		ahead, err := r.gh.CommitsAheadOf(ctx, ghRepo, latestTag, branch)
 		if err != nil {
 			log.Printf("cascade stale: %s ahead check: %v", name, err)
 			continue
 		}
 		if ahead > 0 {
-			log.Printf("cascade: %s branch %s is %d commit(s) ahead of %s — promoting into cascade stages", name, branch, ahead, version)
+			log.Printf("cascade: %s branch %s is %d commit(s) ahead of %s — promoting into cascade stages", name, branch, ahead, latestTag)
 			stale[name] = true
 		}
 
-		// Queue paired deps pinned in this repo's go.mod for staleness checks.
-		gomod, err := r.gh.FetchFile(ctx, ghRepo, version, "go.mod")
+		gomod, err := r.gh.FetchFile(ctx, ghRepo, latestTag, "go.mod")
 		if err != nil {
-			log.Printf("cascade stale: fetch %s@%s go.mod: %v", name, version, err)
+			log.Printf("cascade stale: fetch %s@%s go.mod: %v", name, latestTag, err)
 			continue
 		}
 		mf, err := modfile.Parse("go.mod", []byte(gomod), nil)
@@ -626,9 +637,7 @@ func (r *Reconciler) detectStalePairedRepos(
 			if !ok || depCfg.Kind != config.KindPaired {
 				continue
 			}
-			if _, queued := queue[depName]; !queued {
-				queue[depName] = req.Mod.Version
-			}
+			queue[depName] = true
 		}
 	}
 	return stale, nil
