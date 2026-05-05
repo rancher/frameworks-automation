@@ -25,9 +25,11 @@ type Strategy interface {
 // out by callers before reaching the bumper. If one ever leaks through, the
 // bumper errors with "unknown strategy" rather than silently dropping the bump.
 var strategies = map[config.Strategy]Strategy{
-	config.StrategyGoGet:       goGetStrategy{},
-	config.StrategyChartBump:   scriptStrategy{name: "chart-bump", body: scripts.ChartBump},
-	config.StrategyBumpWebhook: scriptStrategy{name: "bump-webhook", body: scripts.BumpWebhook},
+	config.StrategyGoGet:                      goGetStrategy{},
+	config.StrategyChartBump:                  scriptStrategy{name: "chart-bump", body: scripts.ChartBump},
+	config.StrategyBumpWebhook:                scriptStrategy{name: "bump-webhook", body: scripts.BumpWebhook},
+	config.StrategyBumpRemotedialerProxy:      scriptStrategy{name: "bump-remotedialer-proxy", body: scripts.BumpRemotedialerProxy},
+	config.StrategyChartBumpRemotedialerProxy: scriptStrategy{name: "chart-bump-remotedialer-proxy", body: scripts.ChartBumpRemotedialerProxy},
 }
 
 func lookupStrategy(s config.Strategy) (Strategy, error) {

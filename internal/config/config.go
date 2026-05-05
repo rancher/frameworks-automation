@@ -30,10 +30,12 @@ const (
 type Strategy string
 
 const (
-	StrategyGoGet       Strategy = "go-get"
-	StrategyChartBump   Strategy = "chart-bump"
-	StrategyBumpWebhook Strategy = "bump-webhook"
-	StrategyOrder       Strategy = "order"
+	StrategyGoGet                      Strategy = "go-get"
+	StrategyChartBump                  Strategy = "chart-bump"
+	StrategyBumpWebhook                Strategy = "bump-webhook"
+	StrategyBumpRemotedialerProxy      Strategy = "bump-remotedialer-proxy"
+	StrategyChartBumpRemotedialerProxy Strategy = "chart-bump-remotedialer-proxy"
+	StrategyOrder                      Strategy = "order"
 )
 
 // Dep is one entry in a Repo's deps list. Object form only — name is required;
@@ -160,7 +162,12 @@ func (c *Config) validate() error {
 
 func knownStrategy(s Strategy) bool {
 	switch s {
-	case StrategyGoGet, StrategyChartBump, StrategyBumpWebhook, StrategyOrder:
+	case StrategyGoGet,
+		StrategyChartBump,
+		StrategyBumpWebhook,
+		StrategyBumpRemotedialerProxy,
+		StrategyChartBumpRemotedialerProxy,
+		StrategyOrder:
 		return true
 	}
 	return false

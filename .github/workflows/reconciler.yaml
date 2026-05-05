@@ -40,6 +40,12 @@ jobs:
         with:
           go-version-file: 'go.mod'
 
+      - name: Install yq
+        # Required by the embedded {bump,chart-bump}-remotedialer-proxy.sh
+        # strategy scripts. Matches the upstream remotedialer-proxy
+        # workflows' install method.
+        run: sudo snap install yq --channel=v4/stable
+
       - name: Run reconciler
         env:
           AUTOMATION_REPO: ${{ github.repository }}

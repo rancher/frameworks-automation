@@ -20,3 +20,9 @@ var ChartBump string
 
 //go:embed bump-webhook.sh
 var BumpWebhook string
+
+//go:embed bump-remotedialer-proxy.sh
+var BumpRemotedialerProxy string
+
+//go:embed chart-bump-remotedialer-proxy.sh
+var ChartBumpRemotedialerProxy string

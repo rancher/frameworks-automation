@@ -28,13 +28,20 @@
 #
 # deps: upstream repos this repo depends on. Each entry is `{name, strategy}`
 # where strategy defaults to `go-get` if omitted. Strategies:
-#   go-get        - default; runs `go get module@version`.
-#   chart-bump    - runs `make upgrade <version>` (no go.mod needed).
-#   bump-webhook  - runs the rancher-side webhook bump script.
-#   order         - sequencing-only edge: the downstream waits on this dep's
-#                   bumps to merge before opening its own stage, but no
-#                   in-tree action is taken. Drives the cascade DAG; ignored
-#                   by the bump-op auto-dispatch path.
+#   go-get                          - default; runs `go get module@version`.
+#   chart-bump                      - runs `make upgrade <version>` (no go.mod needed).
+#   bump-webhook                    - runs the rancher-side webhook bump script.
+#   bump-remotedialer-proxy         - runs the rancher-side remotedialer-proxy
+#                                     bump script (updates build.yaml,
+#                                     regenerates via dapper).
+#   chart-bump-remotedialer-proxy   - runs the chart-side remotedialer-proxy
+#                                     bump script (updates package.yaml,
+#                                     `make charts`, prepends release.yaml).
+#   order                           - sequencing-only edge: the downstream waits
+#                                     on this dep's bumps to merge before
+#                                     opening its own stage, but no in-tree
+#                                     action is taken. Drives the cascade DAG;
+#                                     ignored by the bump-op auto-dispatch path.
 #
 # Playground configuration: points at the tomleb/frameworks-automation-*
 # scratch repos. Swap for the real rancher/* modules once the loop is proven.
@@ -56,6 +63,7 @@ repos:
     deps:
       - {name: steve}
       - {name: webhook, strategy: bump-webhook}
+      - {name: remotedialer-proxy, strategy: bump-remotedialer-proxy}
       - {name: wrangler}
       - {name: chart, strategy: order}
   chart:
@@ -65,19 +73,26 @@ repos:
     branch-template: "dev-{rancher-minor}"
     deps:
       - {name: webhook, strategy: chart-bump}
-  steve:
+      - {name: remotedialer-proxy, strategy: chart-bump-remotedialer-proxy}
+  remotedialer-proxy:
     kind: paired
-    repo: rancher/steve
-    fork: tomleb/rancher-steve
+    repo: rancher/remotedialer-proxy
+    fork: tomleb/rancher-remotedialer-proxy
     deps:
-      - {name: apiserver}
-      - {name: norman}
       - {name: wrangler}
   webhook:
     kind: paired
     repo: rancher/webhook
     fork: tomleb/rancher-webhook
     deps:
+      - {name: norman}
+      - {name: wrangler}
+  steve:
+    kind: paired
+    repo: rancher/steve
+    fork: tomleb/rancher-steve
+    deps:
+      - {name: apiserver}
       - {name: norman}
       - {name: wrangler}
   apiserver:

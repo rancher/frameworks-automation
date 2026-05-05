@@ -11,7 +11,13 @@ import (
 )
 
 func TestLookupStrategy(t *testing.T) {
-	for _, s := range []config.Strategy{config.StrategyGoGet, config.StrategyChartBump, config.StrategyBumpWebhook} {
+	for _, s := range []config.Strategy{
+		config.StrategyGoGet,
+		config.StrategyChartBump,
+		config.StrategyBumpWebhook,
+		config.StrategyBumpRemotedialerProxy,
+		config.StrategyChartBumpRemotedialerProxy,
+	} {
 		if _, err := lookupStrategy(s); err != nil {
 			t.Errorf("strategy %q should be registered, got %v", s, err)
 		}

@@ -149,6 +149,13 @@ to `go-get` if omitted. Strategies in the registry today:
   No `go.mod` required.
 - `bump-webhook` — runs the embedded `bump-webhook.sh` against the rancher
   clone.
+- `bump-remotedialer-proxy` — runs the embedded
+  `bump-remotedialer-proxy.sh` against the rancher clone (updates
+  `build.yaml`, regenerates via dapper).
+- `chart-bump-remotedialer-proxy` — runs the embedded
+  `chart-bump-remotedialer-proxy.sh` against the chart clone (updates
+  `packages/remotedialer-proxy/package.yaml`, runs `make charts`, prepends
+  `release.yaml`).
 
 Script-based strategies don't depend on the downstream having the script
 pre-installed: `internal/scripts/` ships the script bodies as `//go:embed`
