@@ -1,0 +1,63 @@
+automation_repo: rancher/release-automation
+github_actor: tomleb
+
+# Mirrors the production cascade-rancher-chart-webhook trigger: no
+# explicit independents — the cascade picks webhook up at paired-latest
+# and walks to rancher. Chart sits between them via order on the
+# rancher side and chart-bump-webhook on the chart side; the planner
+# must promote chart into propagation despite chart having no release
+# tags (rancher/charts in production has none) and no VERSION.md.
+trigger:
+  leaf_branch: main
+  independents: {}
+
+modules:
+  rancher: [github.com/x/rancher]
+  webhook: [github.com/x/webhook]
+  # chart has no Go module (it's a charts repo). Leaving it absent here
+  # mirrors how rancher/charts is treated in the real config.
+
+repos:
+  x/rancher:
+    gh_repo: x/rancher
+    default_branch: main
+    tags: [v2.15.0]
+    branches:
+      main:
+        files:
+          go.mod: |
+            module github.com/x/rancher
+            go 1.24
+            require github.com/x/webhook v0.7.4
+        ahead_of:
+          v2.15.0: 0
+
+  x/chart:
+    gh_repo: x/chart
+    default_branch: dev-v2.15
+    # No tags — the conditional that triggers tag-less promotion. chart's
+    # branch carries the rancher minor via the branch-template, so the
+    # cascade must derive the minor from the branch name rather than
+    # fetching a non-existent VERSION.md.
+    tags: []
+    branches:
+      dev-v2.15:
+        files: {}
+
+  x/webhook:
+    gh_repo: x/webhook
+    default_branch: main
+    tags: [v0.7.4, v0.7.3]
+    branches:
+      main:
+        files:
+          go.mod: |
+            module github.com/x/webhook
+            go 1.24
+        ahead_of:
+          v0.7.4: 0
+    tag_files:
+      v0.7.4:
+        go.mod: |
+          module github.com/x/webhook
+          go 1.24

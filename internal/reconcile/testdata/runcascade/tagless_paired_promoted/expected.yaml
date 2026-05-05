@@ -1,0 +1,38 @@
+# Webhook is the sole paired-latest source. Chart is tag-less and was
+# promoted into propagation because its dep (webhook) is in the moving
+# set — without that promotion, only rancher would be bumped and the
+# chart-bump-webhook PR would be silently skipped (the bug behind
+# cascade-op #125 / #126). Stage 1 opens chart's bump immediately;
+# stage 2 (rancher final) is planned but parks on stage 1's order edge.
+
+sources:
+  - {name: webhook, version: v0.7.4, explicit: false}
+
+stages:
+  - layer: 1
+    bumps:
+      - repo: chart
+        branch: dev-v2.15
+        deps:
+          - {dep: webhook, module: github.com/x/webhook, version: v0.7.4, strategy: chart-bump-webhook}
+    tags: []
+  - layer: 2
+    bumps:
+      - repo: rancher
+        branch: main
+        deps:
+          - {dep: webhook, module: github.com/x/webhook, version: v0.7.4, strategy: bump-webhook}
+    tags: []
+
+issue:
+  title: "[cascade:test] rancher main"
+  labels:
+    - cascade-op
+    - "config:test"
+    - "leaf:rancher:main"
+
+prs_opened:
+  - repo: x/chart
+    base: dev-v2.15
+    modules:
+      - {path: github.com/x/webhook, version: v0.7.4}

@@ -423,13 +423,29 @@ func (r *Reconciler) resolveLatestForBranch(ctx context.Context, repoName, branc
 	if err != nil {
 		return "", err
 	}
-	tbl, err := r.fetchVersionTable(ctx, repoName)
-	if err != nil {
-		return "", fmt.Errorf("fetch %s VERSION.md: %w", repoName, err)
-	}
-	minor := tbl.LookupMinor(branch)
-	if minor == "" {
-		return "", fmt.Errorf("branch %q not in %s VERSION.md", branch, repoName)
+	var minor string
+	if repoCfg.BranchTemplate != "" {
+		// Branch-template repos (rancher/charts) carry the rancher minor in
+		// the branch name itself, so VERSION.md isn't required — and isn't
+		// available (rancher/charts has no VERSION.md). Extract by reversing
+		// the template substitution.
+		before, after, ok := strings.Cut(repoCfg.BranchTemplate, "{rancher-minor}")
+		if !ok {
+			return "", fmt.Errorf("repo %q: branch-template %q lacks {rancher-minor} placeholder", repoName, repoCfg.BranchTemplate)
+		}
+		if !strings.HasPrefix(branch, before) || !strings.HasSuffix(branch, after) {
+			return "", fmt.Errorf("repo %q: branch %q does not match template %q", repoName, branch, repoCfg.BranchTemplate)
+		}
+		minor = strings.TrimSuffix(strings.TrimPrefix(branch, before), after)
+	} else {
+		tbl, err := r.fetchVersionTable(ctx, repoName)
+		if err != nil {
+			return "", fmt.Errorf("fetch %s VERSION.md: %w", repoName, err)
+		}
+		minor = tbl.LookupMinor(branch)
+		if minor == "" {
+			return "", fmt.Errorf("branch %q not in %s VERSION.md", branch, repoName)
+		}
 	}
 	tags, err := r.gh.ListReleaseTags(ctx, ghRepo)
 	if err != nil {
