@@ -81,6 +81,13 @@ if [[ "$PREV_CHART_VERSION" != "$NEW_CHART_VERSION" ]]; then
     sed -i "s/${PREV_CHART_VERSION}/${NEW_CHART_VERSION}/g" "$PKG"
 fi
 
+# `make charts` invokes pull-scripts, which expects origin/automation-core
+# to exist as a local tracking ref. The bumper clones with
+# `--depth=1 --branch=<branch>` (single-branch by default), so without
+# this fetch the pull-scripts step finds automation-core in FETCH_HEAD
+# only and fails with "invalid object name 'origin/automation-core'".
+git fetch --depth=1 origin "+refs/heads/automation-core:refs/remotes/origin/automation-core"
+
 PACKAGE=remotedialer-proxy make charts
 
 # Idempotent prepend: only insert if release.yaml doesn't already list this
