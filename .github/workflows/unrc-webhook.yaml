@@ -1,0 +1,73 @@
+name: UnRC webhook
+
+# Cuts the GA tag for the in-flight webhook rc and propagates it through
+# chart into rancher. This is the same DAG as
+# cascade-rancher-chart-webhook.yaml — only the cascade-mid prompt for
+# webhook differs: instead of suggesting the next rc (v0.9.0-rc.5), this
+# workflow asks for the rc-stripped GA tag (v0.9.0-rc.4 → v0.9.0). Pick
+# this workflow when the team is ready to unRC; pick the cascade-* variant
+# while still iterating on rcs.
+#
+# webhook is treated as a black box at the bottom of this sub-DAG: the
+# cascade picks it up at its latest paired tag (no explicit-version input
+# needed). The operator still cuts the actual tag in webhook's own Release
+# workflow — the reconciler only suggests it.
+
+on:
+  workflow_dispatch:
+    inputs:
+      rancher_branch:
+        description: 'leaf rancher branch the cascade lands on (e.g. main, release/v2.13)'
+        required: true
+        type: string
+
+# Share the reconciler lock — cascade mutates trackers that cron and
+# tag-emitted touch, so runs must not race. Concurrent specialized cascades
+# are allowed (different config: labels keep their issues isolated) but they
+# still serialize against each other so two tracker rewrites don't race.
+concurrency:
+  group: reconciler
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  cascade:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Install yq
+        # Required by the embedded bump-webhook.sh / chart-bump-webhook.sh
+        # strategy scripts. Skip if a yq is already on PATH (the GitHub
+        # ubuntu-latest image ships mikefarah/yq at /usr/bin/yq, which is
+        # what we want); only fall back to snap when nothing's installed.
+        run: |
+          if command -v yq >/dev/null 2>&1; then
+            echo "yq already installed: $(yq --version) at $(command -v yq)"
+            exit 0
+          fi
+          sudo snap install yq --channel=v4/stable
+
+      - name: Run reconciler (cascade, unrc webhook)
+        env:
+          AUTOMATION_REPO: ${{ github.repository }}
+          GH_BOT_TOKEN: ${{ secrets.GH_BOT_TOKEN }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
+          RANCHER_BRANCH: ${{ inputs.rancher_branch }}
+          GITHUB_ACTOR: ${{ github.actor }}
+        run: |
+          go run ./cmd/reconciler \
+            -mode=cascade \
+            -config=rancher-chart-webhook \
+            -leaf-branch="$RANCHER_BRANCH" \
+            -tag-strategy-override=webhook=unrc

@@ -215,6 +215,28 @@ repos:
 	}
 }
 
+func TestLoad_AcceptsUnRCNextTagStrategy(t *testing.T) {
+	path := writeYAML(t, `
+repos:
+  rancher:
+    kind: leaf
+    repo: x/rancher
+    deps:
+      - {name: webhook, strategy: bump-webhook}
+  webhook:
+    kind: paired
+    repo: x/webhook
+    next-tag-strategy: unrc
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.Repos["webhook"].NextTagStrategy != NextTagUnRC {
+		t.Errorf("webhook next-tag-strategy: got %q want %q", cfg.Repos["webhook"].NextTagStrategy, NextTagUnRC)
+	}
+}
+
 func TestLoad_RejectsUnknownNextTagStrategy(t *testing.T) {
 	path := writeYAML(t, `
 repos:

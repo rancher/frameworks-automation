@@ -26,6 +26,11 @@ import (
 // the highest existing tag on the leaf-paired branch (paired-latest); the
 // user doesn't (and shouldn't) supply versions for paired components.
 //
+// `tagStrategyOverride` swaps the per-repo NextTagStrategy for this run
+// only — the persisted config is untouched. Used by the unrc-* workflows
+// to flip a repo's cascade-mid prompt from rc-bump to unRC. Empty/nil map
+// means "use config as written".
+//
 // Pipeline:
 //
 //  1. Validate inputs; resolve leaf repo; assert each independent's version
@@ -37,7 +42,7 @@ import (
 //  5. Open stage 1 bump PRs; subsequent stages open as prior tags arrive
 //     (handled in passCascade).
 //  6. Persist state; run later passes so in-flight ops keep moving.
-func (r *Reconciler) RunCascade(ctx context.Context, leafBranch string, independents map[string]string) error {
+func (r *Reconciler) RunCascade(ctx context.Context, leafBranch string, independents map[string]string, tagStrategyOverride map[string]config.NextTagStrategy) error {
 	if leafBranch == "" {
 		return fmt.Errorf("leaf branch is required")
 	}
@@ -113,7 +118,7 @@ func (r *Reconciler) RunCascade(ctx context.Context, leafBranch string, independ
 		}
 	}
 
-	if err := r.fillTagPromptHints(ctx, stages, leafTable, pairedTables); err != nil {
+	if err := r.fillTagPromptHints(ctx, stages, leafTable, pairedTables, tagStrategyOverride); err != nil {
 		// Hints are advisory — log and continue with a barer prompt.
 		log.Printf("cascade: fill tag prompt hints: %v", err)
 	}
@@ -477,6 +482,7 @@ func (r *Reconciler) fillTagPromptHints(
 	stages []cascade.Stage,
 	leafTable *config.VersionTable,
 	dependentTables map[string]*config.VersionTable,
+	tagStrategyOverride map[string]config.NextTagStrategy,
 ) error {
 	for i := range stages {
 		for j := range stages[i].Tags {
@@ -495,7 +501,11 @@ func (r *Reconciler) fillTagPromptHints(
 			if minor == "" {
 				continue
 			}
-			next, err := r.predictNextTag(ctx, ghRepo, minor, repo.NextTagStrategy)
+			strategy := repo.NextTagStrategy
+			if s, ok := tagStrategyOverride[tg.Repo]; ok {
+				strategy = s
+			}
+			next, err := r.predictNextTag(ctx, ghRepo, minor, strategy)
 			if err != nil {
 				log.Printf("cascade: predict next tag %s %s: %v", tg.Repo, tg.Branch, err)
 				continue
@@ -522,7 +532,9 @@ func minorForRepoBranch(repo, branch string, leafTable *config.VersionTable, dep
 // predictNextTag dispatches to the per-repo NextTagStrategy. NextTagPatch
 // (the default) bumps the patch number; NextTagRC bumps the rc.N suffix
 // when the highest existing release on this minor already carries one,
-// otherwise starts a fresh rc cycle on the next patch.
+// otherwise starts a fresh rc cycle on the next patch; NextTagUnRC drops
+// the rc.N suffix from the highest existing rc tag, returning empty when
+// nothing on the minor still carries one.
 func (r *Reconciler) predictNextTag(ctx context.Context, ghRepo, minor string, strategy config.NextTagStrategy) (string, error) {
 	tags, err := r.gh.ListReleaseTags(ctx, ghRepo)
 	if err != nil {
@@ -531,6 +543,8 @@ func (r *Reconciler) predictNextTag(ctx context.Context, ghRepo, minor string, s
 	switch strategy {
 	case config.NextTagRC:
 		return predictNextRC(tags, minor), nil
+	case config.NextTagUnRC:
+		return predictUnRC(tags, minor), nil
 	default:
 		return predictNextPatch(tags, minor), nil
 	}
@@ -580,6 +594,32 @@ func predictNextRC(tags []string, minor string) string {
 	}
 	patch, _ := patchForMinor(top, minor)
 	return fmt.Sprintf("%s.%d-rc.1", minor, patch+1)
+}
+
+// predictUnRC suggests the GA tag for an in-flight rc on `minor`. Picks the
+// highest semver-ordered release on the minor: if it has an rc.N suffix,
+// returns the suffix-stripped base (v0.9.0-rc.4 → v0.9.0). When the highest
+// existing tag is already GA — or when no prior rc exists on the minor —
+// returns "" because there is nothing to unRC; fillTagPromptHints leaves
+// Expected blank in that case (hints are advisory).
+func predictUnRC(tags []string, minor string) string {
+	var top string
+	for _, t := range tags {
+		if _, ok := patchForMinor(t, minor); !ok {
+			continue
+		}
+		if top == "" || semver.Compare(t, top) > 0 {
+			top = t
+		}
+	}
+	if top == "" {
+		return ""
+	}
+	base, _, hasRC := splitRC(top)
+	if !hasRC {
+		return ""
+	}
+	return base
 }
 
 // patchForMinor returns the patch number of `tag` when it belongs to

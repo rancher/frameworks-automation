@@ -49,6 +49,30 @@ func TestPredictNextRC(t *testing.T) {
 	}
 }
 
+func TestPredictUnRC(t *testing.T) {
+	tests := []struct {
+		name  string
+		tags  []string
+		minor string
+		want  string
+	}{
+		{"rc drops suffix", []string{"v0.9.0-rc.4"}, "v0.9", "v0.9.0"},
+		{"highest rc wins", []string{"v0.9.0-rc.1", "v0.9.0-rc.4", "v0.9.0-rc.2"}, "v0.9", "v0.9.0"},
+		{"GA leaves nothing to unRC", []string{"v0.9.0"}, "v0.9", ""},
+		{"GA outranks earlier rc", []string{"v0.9.0-rc.4", "v0.9.0"}, "v0.9", ""},
+		{"no tags on minor", []string{"v0.8.0-rc.1"}, "v0.9", ""},
+		{"non-rc prerelease is not unRC-able", []string{"v0.9.0-alpha.1"}, "v0.9", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := predictUnRC(tt.tags, tt.minor)
+			if got != tt.want {
+				t.Errorf("got %q want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSplitRC(t *testing.T) {
 	tests := []struct {
 		name      string

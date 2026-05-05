@@ -37,6 +37,13 @@ const (
 	// existing release is a GA (no rc suffix), starts the next patch's rc
 	// cycle (v0.7.5 → v0.7.6-rc.1).
 	NextTagRC NextTagStrategy = "rc"
+	// NextTagUnRC drops the -rc.N suffix from the highest existing rc tag
+	// on the minor (v0.9.0-rc.4 → v0.9.0). When no rc is present (highest
+	// is already GA, or no prior release on the minor) it returns empty —
+	// there is nothing to unRC, and the cascade prompt tolerates a blank
+	// hint. Selected only at run time via -tag-strategy-override; the
+	// per-repo config keeps NextTagRC for the regular rc-bump cascade.
+	NextTagUnRC NextTagStrategy = "unrc"
 )
 
 // Strategy names the procedure run when bumping a dep into a downstream.
@@ -212,7 +219,7 @@ func (c *Config) validate() error {
 				return fmt.Errorf("repo %q: version-md: %w", name, err)
 			}
 		}
-		if !knownNextTagStrategy(r.NextTagStrategy) {
+		if !KnownNextTagStrategy(r.NextTagStrategy) {
 			return fmt.Errorf("repo %q: unknown next-tag-strategy %q", name, r.NextTagStrategy)
 		}
 		seen := make(map[string]bool, len(r.Deps))
@@ -235,9 +242,12 @@ func (c *Config) validate() error {
 	return nil
 }
 
-func knownNextTagStrategy(s NextTagStrategy) bool {
+// KnownNextTagStrategy reports whether s is a recognized strategy. Exported
+// so CLI parsing for the cascade-mode -tag-strategy-override flag can
+// validate without reaching into config internals.
+func KnownNextTagStrategy(s NextTagStrategy) bool {
 	switch s {
-	case NextTagPatch, NextTagRC:
+	case NextTagPatch, NextTagRC, NextTagUnRC:
 		return true
 	}
 	return false
