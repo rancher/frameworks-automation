@@ -125,11 +125,11 @@ func (r *Reconciler) RunCascade(ctx context.Context, leafBranch string, independ
 		Stages:     stages,
 	}
 
-	issue, err := cascade.FindOrCreate(ctx, r.gh, r.settings.AutomationRepo, &op, r.supersedeCascade, r.settings.GitHubActor)
+	issue, err := cascade.FindOrCreate(ctx, r.gh, r.settings.AutomationRepo, r.configName, &op, r.supersedeCascade, r.settings.GitHubActor)
 	if err != nil {
 		return err
 	}
-	log.Printf("cascade: tracker for %s %s -> %s", leafRepo, leafBranch, issue.URL)
+	log.Printf("cascade[%s]: tracker for %s %s -> %s", r.configName, leafRepo, leafBranch, issue.URL)
 
 	mutated, err := r.openCascadeStageBumps(ctx, &op, op.CurrentStage, issue.Number, issue.URL)
 	if err != nil {

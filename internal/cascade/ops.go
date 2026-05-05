@@ -32,9 +32,11 @@ type IssueAPI interface {
 // the cascade's open PRs and close the issue with a comment.
 type SupersedeFunc func(ctx context.Context, old *Issue) error
 
-// FindOrCreate looks up the open cascade for (op.LeafRepo, op.LeafBranch).
-// One cascade per leaf branch is the invariant; the explicit-source set
-// determines whether re-running matches an existing cascade or replaces it.
+// FindOrCreate looks up the open cascade for (config, op.LeafRepo,
+// op.LeafBranch). One cascade per (config, leaf branch) is the invariant —
+// other configs may concurrently hold their own cascade for the same leaf
+// branch, isolated by the config: label. The explicit-source set determines
+// whether re-running matches an existing cascade or replaces it.
 //
 //   - Match (same explicit sources) → merge stored state into op, return that
 //     cascade. Paired-latest stays pinned to whatever was stored at creation
@@ -44,12 +46,12 @@ type SupersedeFunc func(ctx context.Context, old *Issue) error
 func FindOrCreate(
 	ctx context.Context,
 	gh IssueAPI,
-	automationRepo string,
+	automationRepo, config string,
 	op *Op,
 	supersede SupersedeFunc,
 	actor string,
 ) (*Issue, error) {
-	labels := Labels(op.LeafRepo, op.LeafBranch)
+	labels := Labels(config, op.LeafRepo, op.LeafBranch)
 	candidates, err := gh.ListOpenIssues(ctx, automationRepo, labels)
 	if err != nil {
 		return nil, fmt.Errorf("find cascade for %s %s: %w", op.LeafRepo, op.LeafBranch, err)
@@ -91,7 +93,7 @@ func FindOrCreate(
 	if actor != "" {
 		assignees = []string{actor}
 	}
-	created, err := gh.CreateIssue(ctx, automationRepo, Title(op.LeafRepo, op.LeafBranch), body, labels, assignees)
+	created, err := gh.CreateIssue(ctx, automationRepo, Title(config, op.LeafRepo, op.LeafBranch), body, labels, assignees)
 	if err != nil {
 		return nil, fmt.Errorf("create cascade for %s %s: %w", op.LeafRepo, op.LeafBranch, err)
 	}

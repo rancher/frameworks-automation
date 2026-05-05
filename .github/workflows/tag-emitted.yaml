@@ -36,13 +36,9 @@ jobs:
             echo "::error::client_payload missing required fields {repo, tag}"
             exit 1
           fi
-          # Defense in depth: only react to tags from repos we manage. The
-          # PAT scope is the primary control; this rejects bogus dispatches
-          # early with a clearer error.
-          if ! grep -q "^  ${REPO##*/}:" dependencies.yaml 2>/dev/null; then
-            : # dependencies.yaml not yet checked out; the reconciler will
-              # validate properly. Skip the early check.
-          fi
+          # The PAT scope is the primary control over which repos can dispatch
+          # this workflow. The reconciler iterates every dependencies/*.yaml
+          # and silently ignores tags from repos that aren't in any config.
 
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

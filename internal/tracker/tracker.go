@@ -3,9 +3,11 @@
 // per-target PR number, last-known PR state, and (later) the Slack thread ts
 // for in-thread replies.
 //
-// Tracker identity is (dep, version, leaf-branch) — one tracker per bump
-// landing on a specific leaf branch. Lookup is by labels: `bump-op`,
-// `dep:<name>`, `leaf:<leaf-repo>:<leaf-branch>`.
+// Tracker identity is (config, dep, version, leaf-branch) — one tracker per
+// bump landing on a specific leaf branch within one config. Lookup is by
+// labels: `bump-op`, `config:<name>`, `dep:<name>`, `leaf:<leaf-repo>:<leaf-branch>`.
+// The config dimension keeps each `dependencies/<name>.yaml` file's bump-ops
+// fully isolated from every other config's.
 package tracker
 
 import (
@@ -18,18 +20,19 @@ import (
 )
 
 const (
-	LabelOp      = "bump-op"
-	LabelDepFmt  = "dep:%s"          // e.g. dep:steve
-	LabelLeafFmt = "leaf:%s:%s"      // e.g. leaf:rancher:main, leaf:rancher:release/v2.13
+	LabelOp        = "bump-op"
+	LabelConfigFmt = "config:%s"     // e.g. config:rancher-chart-webhook
+	LabelDepFmt    = "dep:%s"        // e.g. dep:steve
+	LabelLeafFmt   = "leaf:%s:%s"    // e.g. leaf:rancher:main, leaf:rancher:release/v2.13
 
 	stateOpen  = "<!-- bump-op-state v1"
 	stateClose = "-->"
 )
 
-// titlePrefixFmt matches Title(): "[bump] {dep} {version} → {leafRepo} {leafBranch}".
+// titlePrefixFmt matches Title(): "[bump:{config}] {dep} {version} → {leafRepo} {leafBranch}".
 // Stable — ParseVersionFromTitle relies on the prefix and the " → " separator.
 const (
-	titlePrefixFmt = "[bump] %s "
+	titlePrefixFmt = "[bump:%s] %s "
 	titleArrow     = " → "
 )
 
@@ -68,25 +71,37 @@ type Persistent struct {
 // Title is the canonical issue title for an op. The version is parsed back
 // out of the title (see ParseVersionFromTitle) — keep this format stable.
 //
-// Format: "[bump] {dep} {version} → {leafRepo} {leafBranch}". Encoding the
-// leaf in the title makes trackers immediately distinguishable in lists
-// (you can tell wrangler v0.5.1→main from wrangler v0.5.1→release/v2.13 at
-// a glance) and gives ParseVersionFromTitle a stable separator to split on.
-func Title(dep, version, leafRepo, leafBranch string) string {
-	return fmt.Sprintf(titlePrefixFmt+"%s"+titleArrow+"%s %s", dep, version, leafRepo, leafBranch)
+// Format: "[bump:{config}] {dep} {version} → {leafRepo} {leafBranch}".
+// Encoding the leaf in the title makes trackers immediately distinguishable
+// in lists (you can tell wrangler v0.5.1→main from wrangler v0.5.1→release/v2.13
+// at a glance), encoding the config disambiguates the same (dep, version,
+// leaf) coexisting under multiple specialized configs, and the " → " separator
+// is what ParseVersionFromTitle splits on.
+func Title(config, dep, version, leafRepo, leafBranch string) string {
+	return fmt.Sprintf(titlePrefixFmt+"%s"+titleArrow+"%s %s", config, dep, version, leafRepo, leafBranch)
 }
 
 // Labels returns the canonical label set for a tracker. The version is NOT a
 // label (it would proliferate one new label per release); it lives in the
 // title and is parsed by ParseVersionFromTitle. The leaf label tags each
 // tracker with its (leafRepo, leafBranch) for human discovery in the GitHub
-// issue list — proliferation is bounded by leaf branches (a handful).
-func Labels(dep, leafRepo, leafBranch string) []string {
+// issue list — proliferation is bounded by leaf branches (a handful). The
+// config label scopes every label-query so config A's reconciler never sees
+// config B's trackers.
+func Labels(config, dep, leafRepo, leafBranch string) []string {
 	return []string{
 		LabelOp,
+		fmt.Sprintf(LabelConfigFmt, config),
 		fmt.Sprintf(LabelDepFmt, dep),
 		fmt.Sprintf(LabelLeafFmt, leafRepo, leafBranch),
 	}
+}
+
+// ConfigLabel returns the single config-axis label for `config`. Used by
+// pass2 / passcascade to scope the broad label query (just LabelOp +
+// ConfigLabel) without needing a specific dep / leaf-branch.
+func ConfigLabel(config string) string {
+	return fmt.Sprintf(LabelConfigFmt, config)
 }
 
 // LeafLabel returns the single leaf-axis label for a (leafRepo, leafBranch).
@@ -98,12 +113,25 @@ func LeafLabel(leafRepo, leafBranch string) string {
 // or "" if `title` doesn't match the canonical format. Used during
 // FindOrCreate (filter candidates returned by the dep-label query) and
 // Supersede (compare versions across open trackers for the same dep+leaf).
+//
+// The config segment in the prefix is treated as a wildcard here — callers
+// already scope by the config: label, so the title parser only needs to
+// confirm "looks like one of our titles for this dep" and pull the version.
 func ParseVersionFromTitle(title, dep string) string {
-	prefix := fmt.Sprintf(titlePrefixFmt, dep)
-	if !strings.HasPrefix(title, prefix) {
+	const open = "[bump:"
+	if !strings.HasPrefix(title, open) {
 		return ""
 	}
-	rest := strings.TrimPrefix(title, prefix)
+	close := strings.Index(title, "] ")
+	if close < 0 {
+		return ""
+	}
+	depPrefix := dep + " "
+	rest := title[close+len("] "):]
+	if !strings.HasPrefix(rest, depPrefix) {
+		return ""
+	}
+	rest = rest[len(depPrefix):]
 	i := strings.Index(rest, titleArrow)
 	if i < 0 {
 		return ""

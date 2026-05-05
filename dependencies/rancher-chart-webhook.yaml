@@ -1,0 +1,44 @@
+# Specialized cascade DAG: rancher ← chart ← webhook.
+#
+# Use .github/workflows/cascade-rancher-chart-webhook.yaml to land a webhook
+# upgrade through chart and into rancher without touching the rest of the
+# canonical DAG (steve, remotedialer-proxy, wrangler, etc.). Cron and
+# tag-emitted iterate every config in this directory and produce per-config
+# bump-op trackers — see ARCHITECTURE.md "Multi-config isolation" for the
+# full label model.
+#
+# webhook is treated as a black box at the bottom of this sub-DAG: its own
+# go.mod deps (norman, wrangler) are intentionally omitted. A cascade in
+# this config picks webhook up at its latest paired tag and propagates
+# forward; for upgrades that need norman/wrangler in the same step, use the
+# canonical dependencies/rancher.yaml cascade.
+
+repos:
+  rancher:
+    kind: leaf
+    repo: rancher/rancher
+    fork: tomleb/rancher-rancher
+    version-md: |
+      | Rancher Branch | Rancher Minor |
+      |----------------|---------------|
+      | main           | v2.15         |
+      | release/v2.14  | v2.14         |
+      | release/v2.13  | v2.13         |
+      | release/v2.12  | v2.12         |
+      | release/v2.11  | v2.11         |
+      | release/v2.10  | v2.10         |
+    deps:
+      - {name: chart, strategy: order}
+      - {name: webhook, strategy: bump-webhook}
+  chart:
+    kind: paired
+    repo: rancher/charts
+    fork: tomleb/rancher-charts
+    branch-template: "dev-{rancher-minor}"
+    deps:
+      - {name: webhook, strategy: chart-bump-webhook}
+  webhook:
+    kind: paired
+    repo: rancher/webhook
+    fork: tomleb/rancher-webhook
+    deps: []

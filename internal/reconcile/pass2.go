@@ -17,7 +17,7 @@ import (
 // One tracker's failure doesn't stop the others — pass 2 is the catch-up
 // loop, so we'd rather keep moving and retry next tick than abort the sweep.
 func (r *Reconciler) pass2PollPRs(ctx context.Context) error {
-	trackers, err := r.gh.ListOpenIssues(ctx, r.settings.AutomationRepo, []string{tracker.LabelOp})
+	trackers, err := r.gh.ListOpenIssues(ctx, r.settings.AutomationRepo, []string{tracker.LabelOp, tracker.ConfigLabel(r.configName)})
 	if err != nil {
 		return fmt.Errorf("list trackers: %w", err)
 	}

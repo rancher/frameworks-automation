@@ -8,6 +8,10 @@ import (
 	ghclient "github.com/rancher/release-automation/internal/github"
 )
 
+// testConfigName is the dummy config-name fed to newWithDeps in tests.
+// Stable so tracker / cascade label expectations in fixtures stay simple.
+const testConfigName = "test"
+
 // fakeRepoState describes one repo's GitHub state for fixture-driven tests.
 type fakeRepoState struct {
 	DefaultBranch string                       // branch returned for FetchFile with ref=""

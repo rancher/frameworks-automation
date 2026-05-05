@@ -79,13 +79,13 @@ func (r *Reconciler) runBump(ctx context.Context, dep, version, leafBranch strin
 		Targets:    toTrackerTargets(rawTargets),
 	}
 
-	issue, err := tracker.FindOrCreate(ctx, r.gh, r.settings.AutomationRepo, &op)
+	issue, err := tracker.FindOrCreate(ctx, r.gh, r.settings.AutomationRepo, r.configName, &op)
 	if err != nil {
 		return err
 	}
-	log.Printf("runBump: tracker for %s %s on %s %s -> %s", dep, version, leafRepo, leafBranch, issue.URL)
+	log.Printf("runBump[%s]: tracker for %s %s on %s %s -> %s", r.configName, dep, version, leafRepo, leafBranch, issue.URL)
 
-	if err := tracker.Supersede(ctx, r.gh, r.settings.AutomationRepo, dep, leafRepo, leafBranch, version, issue.URL); err != nil {
+	if err := tracker.Supersede(ctx, r.gh, r.settings.AutomationRepo, r.configName, dep, leafRepo, leafBranch, version, issue.URL); err != nil {
 		return fmt.Errorf("supersede older trackers for %s on %s %s: %w", dep, leafRepo, leafBranch, err)
 	}
 
@@ -131,7 +131,7 @@ func (r *Reconciler) bumpTarget(ctx context.Context, dep, version, leafBranch, d
 		Repo:       downstreamGH,
 		Fork:       downstream.Fork,
 		BaseBranch: target.Branch,
-		HeadBranch: bumpBranchName(dep, version, leafBranch),
+		HeadBranch: bumpBranchName(r.configName, dep, version, leafBranch),
 		Modules:    []pr.Module{{Path: depModule, Version: version, Strategy: downstream.DepStrategy(dep)}},
 		TrackerURL: trackerURL,
 	}

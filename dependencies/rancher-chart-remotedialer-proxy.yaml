@@ -1,0 +1,40 @@
+# Specialized cascade DAG: rancher ← chart ← remotedialer-proxy.
+#
+# Use .github/workflows/cascade-rancher-chart-remotedialer-proxy.yaml to
+# land a remotedialer-proxy upgrade through chart and into rancher without
+# touching the rest of the canonical DAG. See dependencies/rancher.yaml for
+# the broad multi-component cascade.
+#
+# remotedialer-proxy is a black box here: its own go.mod deps (wrangler)
+# are omitted so the cascade stays narrow. For upgrades that also need
+# wrangler in the same cascade, use the canonical config.
+
+repos:
+  rancher:
+    kind: leaf
+    repo: rancher/rancher
+    fork: tomleb/rancher-rancher
+    version-md: |
+      | Rancher Branch | Rancher Minor |
+      |----------------|---------------|
+      | main           | v2.15         |
+      | release/v2.14  | v2.14         |
+      | release/v2.13  | v2.13         |
+      | release/v2.12  | v2.12         |
+      | release/v2.11  | v2.11         |
+      | release/v2.10  | v2.10         |
+    deps:
+      - {name: chart, strategy: order}
+      - {name: remotedialer-proxy, strategy: bump-remotedialer-proxy}
+  chart:
+    kind: paired
+    repo: rancher/charts
+    fork: tomleb/rancher-charts
+    branch-template: "dev-{rancher-minor}"
+    deps:
+      - {name: remotedialer-proxy, strategy: chart-bump-remotedialer-proxy}
+  remotedialer-proxy:
+    kind: paired
+    repo: rancher/remotedialer-proxy
+    fork: tomleb/rancher-remotedialer-proxy
+    deps: []

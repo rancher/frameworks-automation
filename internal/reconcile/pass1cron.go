@@ -74,11 +74,11 @@ func (r *Reconciler) checkUpstream(ctx context.Context, name string) error {
 	return r.pass1Dispatch(ctx, DispatchEvent{Repo: ghRepo, Tag: tag})
 }
 
-// alreadyProcessed reports whether a tracker for (dep, version, leaf) exists
-// in any state. Open trackers alone are insufficient — pass 2 closes
-// finished ones, and we don't want to re-open them.
+// alreadyProcessed reports whether a tracker for (config, dep, version,
+// leaf) exists in any state. Open trackers alone are insufficient — pass 2
+// closes finished ones, and we don't want to re-open them.
 func (r *Reconciler) alreadyProcessed(ctx context.Context, dep, version, leafRepo, leafBranch string) (bool, error) {
-	issues, err := r.gh.ListIssuesAllStates(ctx, r.settings.AutomationRepo, tracker.Labels(dep, leafRepo, leafBranch))
+	issues, err := r.gh.ListIssuesAllStates(ctx, r.settings.AutomationRepo, tracker.Labels(r.configName, dep, leafRepo, leafBranch))
 	if err != nil {
 		return false, err
 	}

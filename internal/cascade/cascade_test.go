@@ -279,11 +279,12 @@ func TestRenderBumpRef(t *testing.T) {
 }
 
 func TestTitleAndLabelsAndLeafLabel(t *testing.T) {
-	if got, want := Title("rancher", "main"), "[cascade] rancher main"; got != want {
+	if got, want := Title("rancher-chart-webhook", "rancher", "main"),
+		"[cascade:rancher-chart-webhook] rancher main"; got != want {
 		t.Errorf("Title: got %q want %q", got, want)
 	}
-	got := Labels("rancher", "release/v2.13")
-	want := []string{"cascade-op", "leaf:rancher:release/v2.13"}
+	got := Labels("rancher-chart-webhook", "rancher", "release/v2.13")
+	want := []string{"cascade-op", "config:rancher-chart-webhook", "leaf:rancher:release/v2.13"}
 	if len(got) != len(want) {
 		t.Fatalf("Labels len: got %v want %v", got, want)
 	}
@@ -291,6 +292,9 @@ func TestTitleAndLabelsAndLeafLabel(t *testing.T) {
 		if got[i] != want[i] {
 			t.Errorf("Labels[%d]: got %q want %q", i, got[i], want[i])
 		}
+	}
+	if got, want := ConfigLabel("rancher-chart-webhook"), "config:rancher-chart-webhook"; got != want {
+		t.Errorf("ConfigLabel: got %q want %q", got, want)
 	}
 	if got, want := LeafLabel("rancher", "release/v2.13"), "leaf:rancher:release/v2.13"; got != want {
 		t.Errorf("LeafLabel: got %q want %q", got, want)

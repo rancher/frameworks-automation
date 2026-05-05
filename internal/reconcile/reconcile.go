@@ -61,13 +61,17 @@ type Bumper interface {
 }
 
 type Reconciler struct {
-	cfg      *config.Config
-	settings Settings
-	gh       gitHubClient
-	bumper   Bumper
+	configName string // e.g. "rancher-chart-webhook" — basename of dependencies/<name>.yaml
+	cfg        *config.Config
+	settings   Settings
+	gh         gitHubClient
+	bumper     Bumper
 }
 
-func New(cfg *config.Config, s Settings) (*Reconciler, error) {
+func New(configName string, cfg *config.Config, s Settings) (*Reconciler, error) {
+	if configName == "" {
+		return nil, fmt.Errorf("configName is required")
+	}
 	if cfg == nil {
 		return nil, fmt.Errorf("config is required")
 	}
@@ -78,17 +82,18 @@ func New(cfg *config.Config, s Settings) (*Reconciler, error) {
 		return nil, fmt.Errorf("GitHubToken is required")
 	}
 	gh := ghclient.NewClient(context.Background(), s.GitHubToken)
-	return newWithDeps(cfg, s, gh, pr.NewBumper(gh, s.GitHubToken)), nil
+	return newWithDeps(configName, cfg, s, gh, pr.NewBumper(gh, s.GitHubToken)), nil
 }
 
 // newWithDeps wires a Reconciler with caller-supplied collaborators. Used by
 // tests that inject in-memory fakes; prod goes through New.
-func newWithDeps(cfg *config.Config, s Settings, gh gitHubClient, bumper Bumper) *Reconciler {
+func newWithDeps(configName string, cfg *config.Config, s Settings, gh gitHubClient, bumper Bumper) *Reconciler {
 	return &Reconciler{
-		cfg:      cfg,
-		settings: s,
-		gh:       gh,
-		bumper:   bumper,
+		configName: configName,
+		cfg:        cfg,
+		settings:   s,
+		gh:         gh,
+		bumper:     bumper,
 	}
 }
 

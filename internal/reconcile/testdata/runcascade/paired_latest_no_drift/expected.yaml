@@ -20,9 +20,10 @@ stages:
     tags: []
 
 issue:
-  title: "[cascade] rancher main"
+  title: "[cascade:test] rancher main"
   labels:
     - cascade-op
+    - "config:test"
     - "leaf:rancher:main"
 
 prs_opened:

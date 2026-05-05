@@ -1,0 +1,62 @@
+name: Cascade (rancher-chart-webhook)
+
+# Specialized cascade for the rancher ← chart ← webhook path. Walks just
+# that sub-DAG to a chosen rancher branch — see
+# dependencies/rancher-chart-webhook.yaml for the DAG.
+#
+# webhook is treated as a black box at the bottom of this sub-DAG: the
+# cascade picks it up at its latest paired tag (no explicit-version input
+# needed). For upgrades that need norman/wrangler bundled in the same
+# cascade, use cascade-rancher.yaml against the canonical config.
+
+on:
+  workflow_dispatch:
+    inputs:
+      rancher_branch:
+        description: 'leaf rancher branch the cascade lands on (e.g. main, release/v2.13)'
+        required: true
+        type: string
+
+# Share the reconciler lock — cascade mutates trackers that cron and
+# tag-emitted touch, so runs must not race. Concurrent specialized cascades
+# are allowed (different config: labels keep their issues isolated) but they
+# still serialize against each other so two tracker rewrites don't race.
+concurrency:
+  group: reconciler
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  cascade:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Install yq
+        # Required by the embedded {bump,chart-bump}-remotedialer-proxy.sh
+        # strategy scripts. Matches the upstream remotedialer-proxy
+        # workflows' install method.
+        run: sudo snap install yq --channel=v4/stable
+
+      - name: Run reconciler (cascade)
+        env:
+          AUTOMATION_REPO: ${{ github.repository }}
+          GH_BOT_TOKEN: ${{ secrets.GH_BOT_TOKEN }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
+          RANCHER_BRANCH: ${{ inputs.rancher_branch }}
+          GITHUB_ACTOR: ${{ github.actor }}
+        run: |
+          go run ./cmd/reconciler \
+            -mode=cascade \
+            -config=rancher-chart-webhook \
+            -leaf-branch="$RANCHER_BRANCH"

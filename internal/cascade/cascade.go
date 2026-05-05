@@ -10,10 +10,13 @@
 // defers cascade-mid tags to the cascade rather than opening regular bump-op
 // trackers (see pass1 coordination).
 //
-// Tracker identity is (leafRepo, leafBranch). Lookup is by labels:
-// `cascade-op`, `leaf:<leaf-repo>:<leaf-branch>`. The source set lives in
-// the metadata block — re-runs that match on explicit sources merge state;
-// re-runs with a different explicit-source set supersede.
+// Tracker identity is (config, leafRepo, leafBranch). Lookup is by labels:
+// `cascade-op`, `config:<name>`, `leaf:<leaf-repo>:<leaf-branch>`. The source
+// set lives in the metadata block — re-runs that match on explicit sources
+// merge state; re-runs with a different explicit-source set supersede.
+// Different `dependencies/<name>.yaml` files get their own config: label so
+// concurrent specialized cascades on the same leaf branch never touch each
+// other's issues.
 package cascade
 
 import (
@@ -29,8 +32,9 @@ import (
 )
 
 const (
-	LabelOp      = "cascade-op"
-	LabelLeafFmt = "leaf:%s:%s"
+	LabelOp        = "cascade-op"
+	LabelConfigFmt = "config:%s"
+	LabelLeafFmt   = "leaf:%s:%s"
 
 	stateOpen  = "<!-- cascade-op-state v1"
 	stateClose = "-->"
@@ -136,20 +140,33 @@ type Persistent struct {
 	CurrentStage  int      `yaml:"current_stage"`
 }
 
-// Title is the canonical issue title for a cascade. The (leaf, branch) pair
-// is the cascade's identity — the source set lives in the metadata block.
-func Title(leafRepo, leafBranch string) string {
-	return fmt.Sprintf("[cascade] %s %s", leafRepo, leafBranch)
+// Title is the canonical issue title for a cascade. The (config, leaf,
+// branch) triple is the cascade's identity — the source set lives in the
+// metadata block. The config segment in the title also disambiguates two
+// concurrent specialized cascades targeting the same leaf branch in the
+// GitHub issues list.
+func Title(config, leafRepo, leafBranch string) string {
+	return fmt.Sprintf("[cascade:%s] %s %s", config, leafRepo, leafBranch)
 }
 
 // Labels returns the canonical label set. Source dep names are not labels:
 // (a) one cascade can have many sources, (b) the source set is supersede-
 // controlled (see SameExplicitSources), so labels can't track it cleanly.
-func Labels(leafRepo, leafBranch string) []string {
+// The config: label scopes every cascade query so config A's reconciler
+// never sees config B's cascades.
+func Labels(config, leafRepo, leafBranch string) []string {
 	return []string{
 		LabelOp,
+		fmt.Sprintf(LabelConfigFmt, config),
 		fmt.Sprintf(LabelLeafFmt, leafRepo, leafBranch),
 	}
+}
+
+// ConfigLabel returns the single config-axis label for `config`. Used by
+// passCascade / tryClaimCascadeTag to scope the broad cascade query without
+// needing a specific (leaf, branch).
+func ConfigLabel(config string) string {
+	return fmt.Sprintf(LabelConfigFmt, config)
 }
 
 // LeafLabel returns the leaf-axis label for a (leafRepo, leafBranch).

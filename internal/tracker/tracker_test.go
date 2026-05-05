@@ -182,13 +182,14 @@ func TestParseVersionFromTitle(t *testing.T) {
 	cases := []struct {
 		title, dep, want string
 	}{
-		{"[bump] wrangler v0.5.1 → rancher main", "wrangler", "v0.5.1"},
-		{"[bump] steve v0.7.5-rc1 → rancher release/v2.13", "steve", "v0.7.5-rc1"},
-		{"[bump] wrangler v0.5.1 → rancher main", "steve", ""},               // wrong dep
-		{"[bump] wrangler v0.5.1", "wrangler", ""},                           // old format, no arrow
-		{"random title", "wrangler", ""},                                     // wrong shape
-		{"[bump] wranglerv0.5.1 → rancher main", "wrangler", ""},             // missing space
-		{Title("apiserver", "v0.10.0", "rancher", "release/v2.13"), "apiserver", "v0.10.0"}, // round-trip
+		{"[bump:rancher-chart-webhook] wrangler v0.5.1 → rancher main", "wrangler", "v0.5.1"},
+		{"[bump:full] steve v0.7.5-rc1 → rancher release/v2.13", "steve", "v0.7.5-rc1"},
+		{"[bump:full] wrangler v0.5.1 → rancher main", "steve", ""},                                // wrong dep
+		{"[bump:full] wrangler v0.5.1", "wrangler", ""},                                            // missing arrow
+		{"random title", "wrangler", ""},                                                           // wrong shape
+		{"[bump:full] wranglerv0.5.1 → rancher main", "wrangler", ""},                              // missing space
+		{"[bump] wrangler v0.5.1 → rancher main", "wrangler", ""},                                  // legacy single-config format no longer parses
+		{Title("rancher", "apiserver", "v0.10.0", "rancher", "release/v2.13"), "apiserver", "v0.10.0"}, // round-trip
 	}
 	for _, c := range cases {
 		if got := ParseVersionFromTitle(c.title, c.dep); got != c.want {
@@ -197,25 +198,32 @@ func TestParseVersionFromTitle(t *testing.T) {
 	}
 }
 
-func TestLabelsContainsLeafButNotVersion(t *testing.T) {
-	got := Labels("wrangler", "rancher", "release/v2.13")
-	hasLeaf := false
+func TestLabelsContainsConfigLeafAndDep(t *testing.T) {
+	got := Labels("rancher-chart-webhook", "wrangler", "rancher", "release/v2.13")
+	want := map[string]bool{
+		"bump-op":                            true,
+		"config:rancher-chart-webhook":       true,
+		"dep:wrangler":                       true,
+		"leaf:rancher:release/v2.13":         true,
+	}
 	for _, l := range got {
 		if strings.HasPrefix(l, "version:") {
 			t.Errorf("Labels should not include a version: label, got %v", got)
 		}
-		if l == "leaf:rancher:release/v2.13" {
-			hasLeaf = true
-		}
+		delete(want, l)
 	}
-	if !hasLeaf {
-		t.Errorf("Labels should include leaf:rancher:release/v2.13, got %v", got)
+	if len(want) != 0 {
+		t.Errorf("Labels missing entries: %v (got %v)", want, got)
 	}
 }
 
 func TestTitleAndLeafLabel(t *testing.T) {
-	if got, want := Title("wrangler", "v0.5.1", "rancher", "main"), "[bump] wrangler v0.5.1 → rancher main"; got != want {
+	if got, want := Title("rancher-chart-webhook", "wrangler", "v0.5.1", "rancher", "main"),
+		"[bump:rancher-chart-webhook] wrangler v0.5.1 → rancher main"; got != want {
 		t.Errorf("Title: got %q want %q", got, want)
+	}
+	if got, want := ConfigLabel("rancher-chart-webhook"), "config:rancher-chart-webhook"; got != want {
+		t.Errorf("ConfigLabel: got %q want %q", got, want)
 	}
 	if got, want := LeafLabel("rancher", "release/v2.13"), "leaf:rancher:release/v2.13"; got != want {
 		t.Errorf("LeafLabel: got %q want %q", got, want)

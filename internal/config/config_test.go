@@ -331,6 +331,110 @@ func TestModuleToRepo(t *testing.T) {
 	}
 }
 
+func TestLoadAll_TwoConfigsKeyedByBasename(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "rancher-chart-webhook.yaml"), []byte(`
+repos:
+  rancher:
+    kind: leaf
+    repo: x/rancher
+    deps:
+      - {name: webhook, strategy: bump-webhook}
+  webhook:
+    kind: paired
+    repo: x/webhook
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "rancher-chart-remotedialer-proxy.yaml"), []byte(`
+repos:
+  rancher:
+    kind: leaf
+    repo: x/rancher
+    deps:
+      - {name: remotedialer-proxy, strategy: bump-remotedialer-proxy}
+  remotedialer-proxy:
+    kind: paired
+    repo: x/remotedialer-proxy
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfgs, err := LoadAll(dir)
+	if err != nil {
+		t.Fatalf("LoadAll: %v", err)
+	}
+	if len(cfgs) != 2 {
+		t.Fatalf("want 2 configs, got %d: %v", len(cfgs), cfgs)
+	}
+	if _, ok := cfgs["rancher-chart-webhook"]; !ok {
+		t.Errorf("missing rancher-chart-webhook config")
+	}
+	if _, ok := cfgs["rancher-chart-remotedialer-proxy"]; !ok {
+		t.Errorf("missing rancher-chart-remotedialer-proxy config")
+	}
+}
+
+func TestLoadAll_SkipsNonYAML(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.yaml"), []byte(`
+repos:
+  rancher:
+    kind: leaf
+    repo: x/rancher
+    deps: []
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("ignore me"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfgs, err := LoadAll(dir)
+	if err != nil {
+		t.Fatalf("LoadAll: %v", err)
+	}
+	if len(cfgs) != 1 {
+		t.Fatalf("want 1 config, got %d", len(cfgs))
+	}
+}
+
+func TestLoadAll_PropagatesValidationError(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "broken.yaml"), []byte(`
+repos:
+  rancher:
+    kind: leaf
+    deps: []
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadAll(dir); err == nil || !strings.Contains(err.Error(), "repo is required") {
+		t.Errorf("want validation error, got %v", err)
+	}
+}
+
+func TestLoadAll_RejectsEmptyDir(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := LoadAll(dir); err == nil || !strings.Contains(err.Error(), "no *.yaml files") {
+		t.Errorf("want empty-dir error, got %v", err)
+	}
+}
+
+func TestLoadAll_RejectsConfigWithoutLeaf(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "noleaf.yaml"), []byte(`
+repos:
+  wrangler:
+    kind: independent
+    repo: x/wrangler
+    deps: []
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadAll(dir); err == nil || !strings.Contains(err.Error(), "exactly one leaf") {
+		t.Errorf("want one-leaf error, got %v", err)
+	}
+}
+
 func TestFirstModulePath(t *testing.T) {
 	cfg := &Config{
 		Repos: map[string]Repo{

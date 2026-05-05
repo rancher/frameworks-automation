@@ -1,19 +1,21 @@
-name: Cascade
+name: Cascade (rancher)
 
-# Manual entrypoint for a multi-source cascade: walk the DAG one stage at a
-# time toward a chosen rancher branch, opening bump PRs at each layer and
-# prompting a re-tag at every intermediate layer (devs run the per-repo
-# Release workflow with the next-patch version).
+# Manual entrypoint for the canonical multi-source cascade: walk the broad
+# rancher DAG (steve, webhook, remotedialer-proxy, wrangler, …) one stage
+# at a time toward a chosen rancher branch. See dependencies/rancher.yaml
+# for the DAG.
+#
+# Specialized narrower cascades live under their own workflows:
+#   cascade-rancher-chart-webhook.yaml
+#   cascade-rancher-chart-remotedialer-proxy.yaml
 #
 # Inputs:
 #   - rancher_branch: required. The leaf branch the cascade lands on.
-#   - One optional version input per known independent (currently: wrangler).
-#     Empty means "don't include this independent" — the cascade still picks
-#     up paired components (steve, etc.) at their latest tag for the matching
-#     leaf branch.
+#   - One optional version input per known independent in this config
+#     (currently: wrangler).
 #
-# When new independents are added to dependencies.yaml, add a matching input
-# here and a matching shell branch below.
+# When new independents are added to dependencies/rancher.yaml, add a
+# matching input here and a matching shell branch below.
 
 on:
   workflow_dispatch:
@@ -83,5 +85,6 @@ jobs:
           append wrangler "$WRANGLER"
           go run ./cmd/reconciler \
             -mode=cascade \
+            -config=rancher \
             -leaf-branch="$RANCHER_BRANCH" \
             -independents="$INDEPS"

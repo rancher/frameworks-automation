@@ -23,9 +23,10 @@ stages:
     tags: []
 
 issue:
-  title: "[cascade] rancher release/v2.13"
+  title: "[cascade:test] rancher release/v2.13"
   labels:
     - cascade-op
+    - "config:test"
     - "leaf:rancher:release/v2.13"
 
 prs_opened:

@@ -5,6 +5,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -97,6 +98,52 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("validate %s: %w", path, err)
 	}
 	return &c, nil
+}
+
+// LoadAll reads every *.yaml file in `dir`, parses each via Load, and returns
+// the parsed configs keyed by file basename (without extension). The basename
+// is the config name used in tracker / cascade labels (config:<name>) and in
+// the -config flag for cascade / bump-dep modes.
+//
+// Errors:
+//   - dir doesn't exist or isn't readable
+//   - dir contains no *.yaml files
+//   - any single config fails to load or validate
+//   - any single config doesn't have exactly one leaf repo (label-scoped queries
+//     and cascade flow assume one leaf per config; enforce here so the failure
+//     surfaces at startup rather than mid-run)
+func LoadAll(dir string) (map[string]*Config, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("read config dir %s: %w", dir, err)
+	}
+	out := make(map[string]*Config)
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if filepath.Ext(name) != ".yaml" {
+			continue
+		}
+		key := strings.TrimSuffix(name, ".yaml")
+		if _, dup := out[key]; dup {
+			return nil, fmt.Errorf("config dir %s: duplicate basename %q", dir, key)
+		}
+		cfg, err := Load(filepath.Join(dir, name))
+		if err != nil {
+			return nil, err
+		}
+		leaves := cfg.LeafRepos()
+		if len(leaves) != 1 {
+			return nil, fmt.Errorf("config %s: must have exactly one leaf repo, found %d: %v", key, len(leaves), leaves)
+		}
+		out[key] = cfg
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("config dir %s: no *.yaml files", dir)
+	}
+	return out, nil
 }
 
 // applyDefaults fills omitted Strategy values with StrategyGoGet so the rest

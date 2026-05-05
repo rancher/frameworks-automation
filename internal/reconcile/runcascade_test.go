@@ -61,7 +61,7 @@ func runFixture(t *testing.T, dir string) {
 		GitHubToken:    "fake-token",
 		GitHubActor:    state.GitHubActor,
 	}
-	r := newWithDeps(cfg, settings, gh, bumper)
+	r := newWithDeps(testConfigName, cfg, settings, gh, bumper)
 
 	if err := r.RunCascade(context.Background(), state.Trigger.LeafBranch, state.Trigger.Independents); err != nil {
 		t.Fatalf("RunCascade: %v", err)

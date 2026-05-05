@@ -24,7 +24,7 @@ import (
 //
 // One cascade's failure doesn't stop the others — log and continue.
 func (r *Reconciler) passCascade(ctx context.Context) error {
-	cascades, err := r.gh.ListOpenIssues(ctx, r.settings.AutomationRepo, []string{cascade.LabelOp})
+	cascades, err := r.gh.ListOpenIssues(ctx, r.settings.AutomationRepo, []string{cascade.LabelOp, cascade.ConfigLabel(r.configName)})
 	if err != nil {
 		return fmt.Errorf("list cascades: %w", err)
 	}
@@ -251,7 +251,7 @@ func fillBumpDepsFromPriorTags(op *cascade.Op, idx int) {
 // Returns (false, nil) when no cascade is waiting on this dep — caller
 // proceeds with the regular bump path.
 func (r *Reconciler) tryClaimCascadeTag(ctx context.Context, dep, version string) (bool, error) {
-	cascades, err := r.gh.ListOpenIssues(ctx, r.settings.AutomationRepo, []string{cascade.LabelOp})
+	cascades, err := r.gh.ListOpenIssues(ctx, r.settings.AutomationRepo, []string{cascade.LabelOp, cascade.ConfigLabel(r.configName)})
 	if err != nil {
 		return false, err
 	}

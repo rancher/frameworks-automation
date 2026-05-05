@@ -137,11 +137,13 @@ func toTrackerTargets(targets []Target) []tracker.Target {
 // bumpBranchName is the canonical head-branch name for a bump PR. Stable so
 // re-runs idempotently dedupe via ListOpenPRsByHead.
 //
-// Includes the leaf branch so two PRs for the same (dep, version) can
-// coexist on different leaf lines (e.g. wrangler v0.5.1 onto rancher main
-// AND rancher release/v2.13). Leaf branch is sanitized — slashes become
-// dashes so the head-branch path doesn't acquire weird nesting.
-func bumpBranchName(dep, version, leafBranch string) string {
+// Includes the config name and leaf branch so the same (dep, version) can
+// coexist on different leaf lines AND across multiple specialized configs
+// without colliding (e.g. wrangler v0.5.1 onto rancher main from the
+// rancher-chart-webhook config AND from the rancher-chart-remotedialer-proxy
+// config). Leaf branch is sanitized — slashes become dashes so the
+// head-branch path doesn't acquire weird nesting.
+func bumpBranchName(config, dep, version, leafBranch string) string {
 	leaf := strings.ReplaceAll(leafBranch, "/", "-")
-	return fmt.Sprintf("automation/bump-%s-%s-leaf-%s", dep, version, leaf)
+	return fmt.Sprintf("automation/bump-%s-%s-%s-leaf-%s", config, dep, version, leaf)
 }
