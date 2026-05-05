@@ -1,0 +1,34 @@
+# Same 3-stage cascade shape as webhook_rc_bump, but the latest webhook tag
+# is a GA (v0.7.5). The rc strategy's GA-fallback kicks in: the suggested
+# next tag is v0.7.6-rc.1 (start a fresh rc cycle on the next patch).
+
+sources: []
+
+stages:
+  - layer: 1
+    bumps: []
+    tags:
+      - {repo: webhook, branch: main, expected: v0.7.6-rc.1}
+  - layer: 2
+    bumps:
+      - repo: chart
+        branch: dev-v2.15
+        deps:
+          - {dep: webhook, module: github.com/x/webhook, version: "", strategy: chart-bump-webhook}
+    tags: []
+  - layer: 3
+    bumps:
+      - repo: rancher
+        branch: main
+        deps:
+          - {dep: webhook, module: github.com/x/webhook, version: "", strategy: bump-webhook}
+    tags: []
+
+issue:
+  title: "[cascade:test] rancher main"
+  labels:
+    - cascade-op
+    - "config:test"
+    - "leaf:rancher:main"
+
+prs_opened: []

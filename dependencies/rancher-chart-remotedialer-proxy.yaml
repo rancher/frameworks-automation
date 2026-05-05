@@ -37,4 +37,5 @@ repos:
     kind: paired
     repo: rancher/remotedialer-proxy
     fork: tomleb/rancher-remotedialer-proxy
+    next-tag-strategy: rc
     deps: []

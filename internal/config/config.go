@@ -23,6 +23,22 @@ const (
 	KindIndependent Kind = "independent"
 )
 
+// NextTagStrategy names the rule used to suggest the next release tag for a
+// repo when prompting for a cascade-mid retag. The suggestion is advisory —
+// the per-repo Release workflow validates the actual input.
+type NextTagStrategy string
+
+const (
+	// NextTagPatch is the default: bump the patch number on the highest
+	// existing release matching the target minor (v0.7.5 → v0.7.6).
+	NextTagPatch NextTagStrategy = "patch"
+	// NextTagRC bumps the rc.N suffix on the highest existing release that
+	// already carries one (v0.7.5-rc.1 → v0.7.5-rc.2). When the highest
+	// existing release is a GA (no rc suffix), starts the next patch's rc
+	// cycle (v0.7.5 → v0.7.6-rc.1).
+	NextTagRC NextTagStrategy = "rc"
+)
+
 // Strategy names the procedure run when bumping a dep into a downstream.
 // Each value maps to a registered implementation in internal/pr; the bumper
 // dispatches per-dep within a bundle. StrategyOrder is special: it expresses
@@ -66,7 +82,11 @@ type Repo struct {
 	// format as the file. Used for repos that don't ship a VERSION.md
 	// (notably rancher itself).
 	VersionMD string `yaml:"version-md,omitempty"`
-	Deps      []Dep  `yaml:"deps"`
+	// NextTagStrategy selects the rule used to suggest the next release
+	// tag at cascade-mid prompts. Defaults to NextTagPatch (patch+1). Set
+	// to NextTagRC for repos whose release cadence bumps the rc.N suffix.
+	NextTagStrategy NextTagStrategy `yaml:"next-tag-strategy,omitempty"`
+	Deps            []Dep           `yaml:"deps"`
 }
 
 // GitHubRepo returns the GitHub owner/name for this repo.
@@ -147,13 +167,17 @@ func LoadAll(dir string) (map[string]*Config, error) {
 }
 
 // applyDefaults fills omitted Strategy values with StrategyGoGet so the rest
-// of the code can read Dep.Strategy without nil-checking. Mutates in place.
+// of the code can read Dep.Strategy without nil-checking. Also defaults
+// Repo.NextTagStrategy to NextTagPatch. Mutates in place.
 func (c *Config) applyDefaults() {
 	for name, r := range c.Repos {
 		for i := range r.Deps {
 			if r.Deps[i].Strategy == "" {
 				r.Deps[i].Strategy = StrategyGoGet
 			}
+		}
+		if r.NextTagStrategy == "" {
+			r.NextTagStrategy = NextTagPatch
 		}
 		c.Repos[name] = r
 	}
@@ -188,6 +212,9 @@ func (c *Config) validate() error {
 				return fmt.Errorf("repo %q: version-md: %w", name, err)
 			}
 		}
+		if !knownNextTagStrategy(r.NextTagStrategy) {
+			return fmt.Errorf("repo %q: unknown next-tag-strategy %q", name, r.NextTagStrategy)
+		}
 		seen := make(map[string]bool, len(r.Deps))
 		for i, d := range r.Deps {
 			if d.Name == "" {
@@ -206,6 +233,14 @@ func (c *Config) validate() error {
 		}
 	}
 	return nil
+}
+
+func knownNextTagStrategy(s NextTagStrategy) bool {
+	switch s {
+	case NextTagPatch, NextTagRC:
+		return true
+	}
+	return false
 }
 
 func knownStrategy(s Strategy) bool {

@@ -41,4 +41,5 @@ repos:
     kind: paired
     repo: rancher/webhook
     fork: tomleb/rancher-webhook
+    next-tag-strategy: rc
     deps: []

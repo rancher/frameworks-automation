@@ -86,12 +86,14 @@ repos:
     kind: paired
     repo: rancher/remotedialer-proxy
     fork: tomleb/rancher-remotedialer-proxy
+    next-tag-strategy: rc
     deps:
       - {name: wrangler}
   webhook:
     kind: paired
     repo: rancher/webhook
     fork: tomleb/rancher-webhook
+    next-tag-strategy: rc
     deps:
       - {name: norman}
       - {name: wrangler}

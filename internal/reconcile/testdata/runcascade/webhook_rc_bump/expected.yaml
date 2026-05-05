@@ -1,0 +1,44 @@
+# 3-stage cascade through the rancher ← chart ← webhook chain triggered by
+# webhook being branch-ahead of v0.7.5-rc.1.
+#
+#   Stage 1: tag webhook (no bump — webhook has no in-scope deps in this
+#            sub-DAG). The Expected hint exercises the rc-bump strategy:
+#            v0.7.5-rc.1 → v0.7.5-rc.2.
+#   Stage 2: bump chart [webhook→pending]. Chart is order-edged from rancher
+#            so it gets no tag prompt itself.
+#   Stage 3: bump rancher [webhook→pending]. Final stage, no tag prompt.
+#
+# Webhook is paired-latest into chart and rancher (chart-bump-webhook /
+# bump-webhook), so both bundles list it; rancher's order edge to chart is
+# filtered before it reaches the bundle.
+
+sources: []
+
+stages:
+  - layer: 1
+    bumps: []
+    tags:
+      - {repo: webhook, branch: main, expected: v0.7.5-rc.2}
+  - layer: 2
+    bumps:
+      - repo: chart
+        branch: dev-v2.15
+        deps:
+          - {dep: webhook, module: github.com/x/webhook, version: "", strategy: chart-bump-webhook}
+    tags: []
+  - layer: 3
+    bumps:
+      - repo: rancher
+        branch: main
+        deps:
+          - {dep: webhook, module: github.com/x/webhook, version: "", strategy: bump-webhook}
+    tags: []
+
+issue:
+  title: "[cascade:test] rancher main"
+  labels:
+    - cascade-op
+    - "config:test"
+    - "leaf:rancher:main"
+
+prs_opened: []

@@ -145,8 +145,9 @@ type expectedDep struct {
 }
 
 type expectedTag struct {
-	Repo   string `yaml:"repo"`
-	Branch string `yaml:"branch"`
+	Repo     string `yaml:"repo"`
+	Branch   string `yaml:"branch"`
+	Expected string `yaml:"expected,omitempty"`
 }
 
 type expectedIssue struct {
@@ -279,6 +280,22 @@ func assertStages(t *testing.T, want []expectedStage, got []cascade.Stage) {
 	t.Helper()
 	gotNorm := normalizeStages(got)
 	wantNorm := normalizeExpectedStages(want)
+	// `expected` (next-tag hint) is opt-in: a fixture that omits it
+	// shouldn't fail when fillTagPromptHints computes one. Clear got's
+	// Expected for any tag whose want-pair didn't set it.
+	for i := range gotNorm {
+		if i >= len(wantNorm) {
+			break
+		}
+		for j := range gotNorm[i].Tags {
+			if j >= len(wantNorm[i].Tags) {
+				break
+			}
+			if wantNorm[i].Tags[j].Expected == "" {
+				gotNorm[i].Tags[j].Expected = ""
+			}
+		}
+	}
 	if !reflect.DeepEqual(wantNorm, gotNorm) {
 		t.Errorf("stages mismatch:\n  got:  %s\n  want: %s",
 			yamlDump(t, gotNorm), yamlDump(t, wantNorm))
@@ -387,7 +404,7 @@ func normalizeStages(stages []cascade.Stage) []expectedStage {
 		if len(st.Tags) > 0 {
 			tags = make([]expectedTag, len(st.Tags))
 			for j, tg := range st.Tags {
-				tags[j] = expectedTag{Repo: tg.Repo, Branch: tg.Branch}
+				tags[j] = expectedTag{Repo: tg.Repo, Branch: tg.Branch, Expected: tg.Expected}
 			}
 			sort.Slice(tags, func(a, b int) bool {
 				if tags[a].Repo != tags[b].Repo {

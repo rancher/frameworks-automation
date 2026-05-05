@@ -190,6 +190,45 @@ repos:
 	}
 }
 
+func TestLoad_NextTagStrategyDefaults(t *testing.T) {
+	path := writeYAML(t, `
+repos:
+  rancher:
+    kind: leaf
+    repo: x/rancher
+    deps:
+      - {name: webhook, strategy: bump-webhook}
+  webhook:
+    kind: paired
+    repo: x/webhook
+    next-tag-strategy: rc
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.Repos["rancher"].NextTagStrategy != NextTagPatch {
+		t.Errorf("rancher next-tag-strategy should default to patch, got %q", cfg.Repos["rancher"].NextTagStrategy)
+	}
+	if cfg.Repos["webhook"].NextTagStrategy != NextTagRC {
+		t.Errorf("webhook next-tag-strategy: got %q want %q", cfg.Repos["webhook"].NextTagStrategy, NextTagRC)
+	}
+}
+
+func TestLoad_RejectsUnknownNextTagStrategy(t *testing.T) {
+	path := writeYAML(t, `
+repos:
+  rancher:
+    kind: leaf
+    repo: x/rancher
+    next-tag-strategy: nope
+    deps: []
+`)
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "unknown next-tag-strategy") {
+		t.Errorf("want unknown-next-tag-strategy error, got %v", err)
+	}
+}
+
 func TestLoad_RejectsBranchTemplateOnNonPaired(t *testing.T) {
 	path := writeYAML(t, `
 repos:
