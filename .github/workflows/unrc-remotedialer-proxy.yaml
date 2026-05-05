@@ -63,6 +63,5 @@ jobs:
         run: |
           go run ./cmd/reconciler \
             -mode=cascade \
-            -config=rancher-chart-remotedialer-proxy \
-            -leaf-branch="$RANCHER_BRANCH" \
-            -tag-strategy-override=remotedialer-proxy=unrc
+            -config=rancher-chart-remotedialer-proxy-unrc \
+            -leaf-branch="$RANCHER_BRANCH"

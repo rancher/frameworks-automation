@@ -68,6 +68,5 @@ jobs:
         run: |
           go run ./cmd/reconciler \
             -mode=cascade \
-            -config=rancher-chart-webhook \
-            -leaf-branch="$RANCHER_BRANCH" \
-            -tag-strategy-override=webhook=unrc
+            -config=rancher-chart-webhook-unrc \
+            -leaf-branch="$RANCHER_BRANCH"

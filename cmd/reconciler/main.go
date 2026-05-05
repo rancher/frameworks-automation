@@ -44,17 +44,16 @@ import (
 
 func main() {
 	var (
-		mode                = flag.String("mode", "cron", "cron|dispatch|bump-dep|cascade|validate-config")
-		configDir           = flag.String("config-dir", "dependencies", "directory containing the per-path *.yaml configs")
-		configName          = flag.String("config", "", "cascade|bump-dep mode: scope to one config (basename of dependencies/<name>.yaml). Required for cascade; optional for bump-dep (default: every config containing the dep).")
-		repo                = flag.String("repo", "", "dispatch mode: owner/name of repo that emitted the tag")
-		tag                 = flag.String("tag", "", "dispatch mode: tag that was emitted (e.g. v0.7.5)")
-		sha                 = flag.String("sha", "", "dispatch mode: commit SHA the tag points at")
-		dep                 = flag.String("dep", "", "bump-dep mode: dep config key (e.g. wrangler)")
-		version             = flag.String("version", "", "bump-dep mode: version to bump (e.g. v0.5.1)")
-		leafBranch          = flag.String("leaf-branch", "", "bump-dep|cascade mode: leaf-repo branch the op targets (e.g. release/v2.13)")
-		independents        = flag.String("independents", "", "cascade mode: comma-separated independent=version pairs (e.g. wrangler=v0.5.2,lasso=v1.0.0). Empty means no explicit independents — paired deps still get picked up at their latest tag.")
-		tagStrategyOverride = flag.String("tag-strategy-override", "", "cascade mode: comma-separated repo=strategy pairs that override per-repo next-tag-strategy for this run only (e.g. webhook=unrc). Used by the unrc-* workflows.")
+		mode         = flag.String("mode", "cron", "cron|dispatch|bump-dep|cascade|validate-config")
+		configDir    = flag.String("config-dir", "dependencies", "directory containing the per-path *.yaml configs")
+		configName   = flag.String("config", "", "cascade|bump-dep mode: scope to one config (basename of dependencies/<name>.yaml). Required for cascade; optional for bump-dep (default: every config containing the dep).")
+		repo         = flag.String("repo", "", "dispatch mode: owner/name of repo that emitted the tag")
+		tag          = flag.String("tag", "", "dispatch mode: tag that was emitted (e.g. v0.7.5)")
+		sha          = flag.String("sha", "", "dispatch mode: commit SHA the tag points at")
+		dep          = flag.String("dep", "", "bump-dep mode: dep config key (e.g. wrangler)")
+		version      = flag.String("version", "", "bump-dep mode: version to bump (e.g. v0.5.1)")
+		leafBranch   = flag.String("leaf-branch", "", "bump-dep|cascade mode: leaf-repo branch the op targets (e.g. release/v2.13)")
+		independents = flag.String("independents", "", "cascade mode: comma-separated independent=version pairs (e.g. wrangler=v0.5.2,lasso=v1.0.0). Empty means no explicit independents — paired deps still get picked up at their latest tag.")
 	)
 	flag.Parse()
 
@@ -125,16 +124,7 @@ func main() {
 				log.Fatalf("cascade: independent %q not in config %q", name, *configName)
 			}
 		}
-		override, err := parseTagStrategyOverride(*tagStrategyOverride)
-		if err != nil {
-			log.Fatalf("cascade: %v", err)
-		}
-		for name := range override {
-			if _, ok := cfgs[*configName].Repos[name]; !ok {
-				log.Fatalf("cascade: tag-strategy-override repo %q not in config %q", name, *configName)
-			}
-		}
-		if err := r.RunCascade(ctx, *leafBranch, indep, override); err != nil {
+		if err := r.RunCascade(ctx, *leafBranch, indep); err != nil {
 			log.Fatalf("cascade[%s]: %v", *configName, err)
 		}
 	default:
@@ -252,37 +242,6 @@ func parseIndependents(s string) (map[string]string, error) {
 			return nil, fmt.Errorf("independent %q: name and version are both required", kv)
 		}
 		out[name] = version
-	}
-	return out, nil
-}
-
-// parseTagStrategyOverride parses "repo=strategy,repo=strategy" pairs from
-// the cascade-mode -tag-strategy-override flag. Each strategy is validated
-// against config.KnownNextTagStrategy so a typo fails the run instead of
-// silently falling through to the configured default.
-func parseTagStrategyOverride(s string) (map[string]config.NextTagStrategy, error) {
-	out := map[string]config.NextTagStrategy{}
-	if s == "" {
-		return out, nil
-	}
-	for _, kv := range strings.Split(s, ",") {
-		kv = strings.TrimSpace(kv)
-		if kv == "" {
-			continue
-		}
-		eq := strings.IndexByte(kv, '=')
-		if eq <= 0 {
-			return nil, fmt.Errorf("tag-strategy-override %q: want repo=strategy", kv)
-		}
-		name := strings.TrimSpace(kv[:eq])
-		strategy := config.NextTagStrategy(strings.TrimSpace(kv[eq+1:]))
-		if name == "" || strategy == "" {
-			return nil, fmt.Errorf("tag-strategy-override %q: repo and strategy are both required", kv)
-		}
-		if !config.KnownNextTagStrategy(strategy) {
-			return nil, fmt.Errorf("tag-strategy-override %q: unknown strategy %q", kv, strategy)
-		}
-		out[name] = strategy
 	}
 	return out, nil
 }

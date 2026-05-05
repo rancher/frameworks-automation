@@ -26,11 +26,6 @@ import (
 // the highest existing tag on the leaf-paired branch (paired-latest); the
 // user doesn't (and shouldn't) supply versions for paired components.
 //
-// `tagStrategyOverride` swaps the per-repo NextTagStrategy for this run
-// only — the persisted config is untouched. Used by the unrc-* workflows
-// to flip a repo's cascade-mid prompt from rc-bump to unRC. Empty/nil map
-// means "use config as written".
-//
 // Pipeline:
 //
 //  1. Validate inputs; resolve leaf repo; assert each independent's version
@@ -42,7 +37,7 @@ import (
 //  5. Open stage 1 bump PRs; subsequent stages open as prior tags arrive
 //     (handled in passCascade).
 //  6. Persist state; run later passes so in-flight ops keep moving.
-func (r *Reconciler) RunCascade(ctx context.Context, leafBranch string, independents map[string]string, tagStrategyOverride map[string]config.NextTagStrategy) error {
+func (r *Reconciler) RunCascade(ctx context.Context, leafBranch string, independents map[string]string) error {
 	if leafBranch == "" {
 		return fmt.Errorf("leaf branch is required")
 	}
@@ -118,7 +113,7 @@ func (r *Reconciler) RunCascade(ctx context.Context, leafBranch string, independ
 		}
 	}
 
-	if err := r.fillTagPromptHints(ctx, stages, leafTable, pairedTables, tagStrategyOverride); err != nil {
+	if err := r.fillTagPromptHints(ctx, stages, leafTable, pairedTables); err != nil {
 		// Hints are advisory — log and continue with a barer prompt.
 		log.Printf("cascade: fill tag prompt hints: %v", err)
 	}
@@ -482,7 +477,6 @@ func (r *Reconciler) fillTagPromptHints(
 	stages []cascade.Stage,
 	leafTable *config.VersionTable,
 	dependentTables map[string]*config.VersionTable,
-	tagStrategyOverride map[string]config.NextTagStrategy,
 ) error {
 	for i := range stages {
 		for j := range stages[i].Tags {
@@ -501,11 +495,7 @@ func (r *Reconciler) fillTagPromptHints(
 			if minor == "" {
 				continue
 			}
-			strategy := repo.NextTagStrategy
-			if s, ok := tagStrategyOverride[tg.Repo]; ok {
-				strategy = s
-			}
-			next, err := r.predictNextTag(ctx, ghRepo, minor, strategy)
+			next, err := r.predictNextTag(ctx, ghRepo, minor, repo.NextTagStrategy)
 			if err != nil {
 				log.Printf("cascade: predict next tag %s %s: %v", tg.Repo, tg.Branch, err)
 				continue

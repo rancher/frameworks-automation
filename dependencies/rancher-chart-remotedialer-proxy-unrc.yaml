@@ -1,0 +1,48 @@
+# Specialized cascade DAG: rancher ← chart ← remotedialer-proxy (unRC variant).
+#
+# Identical to dependencies/rancher-chart-remotedialer-proxy.yaml except
+# remotedialer-proxy's next-tag-strategy is unrc — the cascade-mid prompt
+# asks for the GA tag stripped of the rc.N suffix (v0.5.0-rc.4 → v0.5.0)
+# instead of the next rc. Triggered manually by
+# .github/workflows/unrc-remotedialer-proxy.yaml when the team is ready
+# to cut the GA from an in-flight rc.
+#
+# This config also reacts to remotedialer-proxy tag emissions via cron
+# and tag-emitted (same as the rc-bump variant) so that once the operator
+# cuts the GA tag in remotedialer-proxy's Release workflow, the unrc
+# cascade picks the tag up and propagates it through chart and into
+# rancher.
+#
+# remotedialer-proxy is a black box here: its own go.mod deps (wrangler)
+# are omitted so the cascade stays narrow.
+
+repos:
+  rancher:
+    kind: leaf
+    repo: rancher/rancher
+    fork: tomleb/rancher-rancher
+    version-md: |
+      | Rancher Branch | Rancher Minor |
+      |----------------|---------------|
+      | main           | v2.15         |
+      | release/v2.14  | v2.14         |
+      | release/v2.13  | v2.13         |
+      | release/v2.12  | v2.12         |
+      | release/v2.11  | v2.11         |
+      | release/v2.10  | v2.10         |
+    deps:
+      - {name: chart, strategy: order}
+      - {name: remotedialer-proxy, strategy: bump-remotedialer-proxy}
+  chart:
+    kind: paired
+    repo: rancher/charts
+    fork: tomleb/rancher-charts
+    branch-template: "dev-{rancher-minor}"
+    deps:
+      - {name: remotedialer-proxy, strategy: chart-bump-remotedialer-proxy}
+  remotedialer-proxy:
+    kind: paired
+    repo: rancher/remotedialer-proxy
+    fork: tomleb/rancher-remotedialer-proxy
+    next-tag-strategy: unrc
+    deps: []

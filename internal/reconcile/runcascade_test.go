@@ -63,7 +63,7 @@ func runFixture(t *testing.T, dir string) {
 	}
 	r := newWithDeps(testConfigName, cfg, settings, gh, bumper)
 
-	if err := r.RunCascade(context.Background(), state.Trigger.LeafBranch, state.Trigger.Independents, nil); err != nil {
+	if err := r.RunCascade(context.Background(), state.Trigger.LeafBranch, state.Trigger.Independents); err != nil {
 		t.Fatalf("RunCascade: %v", err)
 	}
 

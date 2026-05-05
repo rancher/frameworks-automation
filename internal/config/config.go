@@ -219,7 +219,7 @@ func (c *Config) validate() error {
 				return fmt.Errorf("repo %q: version-md: %w", name, err)
 			}
 		}
-		if !KnownNextTagStrategy(r.NextTagStrategy) {
+		if !knownNextTagStrategy(r.NextTagStrategy) {
 			return fmt.Errorf("repo %q: unknown next-tag-strategy %q", name, r.NextTagStrategy)
 		}
 		seen := make(map[string]bool, len(r.Deps))
@@ -242,10 +242,7 @@ func (c *Config) validate() error {
 	return nil
 }
 
-// KnownNextTagStrategy reports whether s is a recognized strategy. Exported
-// so CLI parsing for the cascade-mode -tag-strategy-override flag can
-// validate without reaching into config internals.
-func KnownNextTagStrategy(s NextTagStrategy) bool {
+func knownNextTagStrategy(s NextTagStrategy) bool {
 	switch s {
 	case NextTagPatch, NextTagRC, NextTagUnRC:
 		return true

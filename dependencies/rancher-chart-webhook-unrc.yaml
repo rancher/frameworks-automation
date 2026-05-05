@@ -1,0 +1,46 @@
+# Specialized cascade DAG: rancher ← chart ← webhook (unRC variant).
+#
+# Identical to dependencies/rancher-chart-webhook.yaml except webhook's
+# next-tag-strategy is unrc — the cascade-mid prompt asks for the GA tag
+# stripped of the rc.N suffix (v0.9.0-rc.4 → v0.9.0) instead of the next
+# rc. Triggered manually by .github/workflows/unrc-webhook.yaml when the
+# team is ready to cut the GA from an in-flight rc.
+#
+# This config also reacts to webhook tag emissions via cron and
+# tag-emitted (same as the rc-bump variant) so that once the operator
+# cuts the GA tag in webhook's Release workflow, the unrc cascade picks
+# the tag up and propagates it through chart and into rancher.
+#
+# webhook is treated as a black box at the bottom of this sub-DAG: its
+# own go.mod deps (norman, wrangler) are intentionally omitted.
+
+repos:
+  rancher:
+    kind: leaf
+    repo: rancher/rancher
+    fork: tomleb/rancher-rancher
+    version-md: |
+      | Rancher Branch | Rancher Minor |
+      |----------------|---------------|
+      | main           | v2.15         |
+      | release/v2.14  | v2.14         |
+      | release/v2.13  | v2.13         |
+      | release/v2.12  | v2.12         |
+      | release/v2.11  | v2.11         |
+      | release/v2.10  | v2.10         |
+    deps:
+      - {name: chart, strategy: order}
+      - {name: webhook, strategy: bump-webhook}
+  chart:
+    kind: paired
+    repo: rancher/charts
+    fork: tomleb/rancher-charts
+    branch-template: "dev-{rancher-minor}"
+    deps:
+      - {name: webhook, strategy: chart-bump-webhook}
+  webhook:
+    kind: paired
+    repo: rancher/webhook
+    fork: tomleb/rancher-webhook
+    next-tag-strategy: unrc
+    deps: []
