@@ -47,6 +47,17 @@ jobs:
         # workflows' install method.
         run: sudo snap install yq --channel=v4/stable
 
+      - name: Debug yq + clone
+        # Temporary diagnostic for the build.yaml-not-found failure during
+        # the rancher webhook bump. Confirms yq v4 is on PATH and that a
+        # fresh shallow clone of rancher/rancher main contains build.yaml.
+        run: |
+          which yq
+          yq --version
+          git clone --depth=1 --branch=main https://github.com/rancher/rancher.git /tmp/check
+          ls /tmp/check/build.yaml
+          yq -r '.webhookVersion' /tmp/check/build.yaml
+
       - name: Run reconciler (cascade)
         env:
           AUTOMATION_REPO: ${{ github.repository }}
