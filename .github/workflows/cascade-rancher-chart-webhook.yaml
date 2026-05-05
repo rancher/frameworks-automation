@@ -43,9 +43,15 @@ jobs:
 
       - name: Install yq
         # Required by the embedded {bump,chart-bump}-remotedialer-proxy.sh
-        # strategy scripts. Matches the upstream remotedialer-proxy
-        # workflows' install method.
-        run: sudo snap install yq --channel=v4/stable
+        # strategy scripts. Skip if a yq is already on PATH (the GitHub
+        # ubuntu-latest image ships mikefarah/yq at /usr/bin/yq, which is
+        # what we want); only fall back to snap when nothing's installed.
+        run: |
+          if command -v yq >/dev/null 2>&1; then
+            echo "yq already installed: $(yq --version) at $(command -v yq)"
+            exit 0
+          fi
+          sudo snap install yq --channel=v4/stable
 
       - name: Debug yq + clone
         # Temporary diagnostic for the build.yaml-not-found failure during
