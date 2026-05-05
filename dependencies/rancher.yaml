@@ -67,6 +67,8 @@ repos:
       | release/v2.11  | v2.11         |
       | release/v2.10  | v2.10         |
     deps:
+      - {name: apiserver}
+      - {name: norman}
       - {name: steve}
       - {name: webhook, strategy: bump-webhook}
       - {name: remotedialer-proxy, strategy: bump-remotedialer-proxy}
