@@ -1,0 +1,41 @@
+# With webhook already at GA (v0.7.5) and no commits past it,
+# forceUnRCPromotions skips webhook (no rc to strip) and
+# detectStalePairedRepos skips it too (no branch-ahead). Webhook stays
+# paired-latest with no tag prompt — there is nothing to unRC.
+#
+# Chart still gets a bump stage because findTaglessPromotions promotes
+# tag-less paired repos that depend on something in the moving set
+# (chart has no tags and pulls in webhook). The cascade therefore lands
+# the existing GA on chart, then rancher.
+
+sources:
+  - {name: webhook, version: v0.7.5, explicit: false}
+
+stages:
+  - layer: 1
+    bumps:
+      - repo: chart
+        branch: dev-v2.15
+        deps:
+          - {dep: webhook, module: github.com/x/webhook, version: v0.7.5, strategy: chart-bump-webhook}
+    tags: []
+  - layer: 2
+    bumps:
+      - repo: rancher
+        branch: main
+        deps:
+          - {dep: webhook, module: github.com/x/webhook, version: v0.7.5, strategy: bump-webhook}
+    tags: []
+
+issue:
+  title: "[cascade:test] rancher main"
+  labels:
+    - cascade-op
+    - "config:test"
+    - "leaf:rancher:main"
+
+prs_opened:
+  - repo: x/charts
+    base: dev-v2.15
+    modules:
+      - {path: github.com/x/webhook, version: v0.7.5}

@@ -1,0 +1,60 @@
+automation_repo: rancher/release-automation
+github_actor: tomleb
+
+# Empty independents. webhook has NO commits past its latest rc tag
+# (v0.7.5-rc.1) — detectStalePairedRepos would not promote it. The unrc
+# strategy flips that: forceUnRCPromotions promotes webhook anyway because
+# its latest tag still carries an -rc.N suffix and the whole point of the
+# unrc workflow is to re-tag that same commit as GA.
+trigger:
+  leaf_branch: main
+  independents: {}
+
+modules:
+  rancher: [github.com/x/rancher]
+  webhook: [github.com/x/webhook]
+
+repos:
+  x/rancher:
+    gh_repo: x/rancher
+    default_branch: main
+    tags: [v2.15.0]
+    branches:
+      main:
+        files:
+          go.mod: |
+            module github.com/x/rancher
+            go 1.24
+            require github.com/x/webhook v0.7.5-rc.1
+        ahead_of:
+          v2.15.0: 0
+
+  x/charts:
+    gh_repo: x/charts
+    default_branch: dev-v2.15
+    tags: []
+    branches:
+      dev-v2.15:
+        files: {}
+
+  x/webhook:
+    gh_repo: x/webhook
+    default_branch: main
+    # Latest tag is the highest rc on the v0.7 minor — predictUnRC should
+    # strip the rc suffix and return v0.7.5.
+    tags: [v0.7.5-rc.1, v0.7.4]
+    branches:
+      main:
+        files:
+          go.mod: |
+            module github.com/x/webhook
+            go 1.24
+        # No commits past the rc — staleness alone would NOT promote
+        # webhook. The unrc strategy is what forces promotion here.
+        ahead_of:
+          v0.7.5-rc.1: 0
+    tag_files:
+      v0.7.5-rc.1:
+        go.mod: |
+          module github.com/x/webhook
+          go 1.24

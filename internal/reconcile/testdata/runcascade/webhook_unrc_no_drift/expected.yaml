@@ -1,0 +1,40 @@
+# 3-stage cascade triggered solely by forceUnRCPromotions — no commits past
+# the latest rc tag would have prompted detectStalePairedRepos to promote
+# webhook. The unrc strategy is what gives webhook its own tag stage.
+#
+#   Stage 1: tag webhook (no bump — webhook has no in-scope deps in this
+#            sub-DAG). Expected = v0.7.5 (rc suffix dropped).
+#   Stage 2: bump chart [webhook→pending]. Chart is order-edged from rancher
+#            so it gets no tag prompt itself.
+#   Stage 3: bump rancher [webhook→pending]. Final stage, no tag prompt.
+
+sources: []
+
+stages:
+  - layer: 1
+    bumps: []
+    tags:
+      - {repo: webhook, branch: main, expected: v0.7.5}
+  - layer: 2
+    bumps:
+      - repo: chart
+        branch: dev-v2.15
+        deps:
+          - {dep: webhook, module: github.com/x/webhook, version: "", strategy: chart-bump-webhook}
+    tags: []
+  - layer: 3
+    bumps:
+      - repo: rancher
+        branch: main
+        deps:
+          - {dep: webhook, module: github.com/x/webhook, version: "", strategy: bump-webhook}
+    tags: []
+
+issue:
+  title: "[cascade:test] rancher main"
+  labels:
+    - cascade-op
+    - "config:test"
+    - "leaf:rancher:main"
+
+prs_opened: []

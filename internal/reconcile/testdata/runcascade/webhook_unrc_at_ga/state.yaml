@@ -1,0 +1,57 @@
+automation_repo: rancher/release-automation
+github_actor: tomleb
+
+# Empty independents. webhook's latest tag is already GA (v0.7.5, no rc
+# suffix) and the branch has no commits past it. forceUnRCPromotions sees
+# no rc to strip and skips promotion; detectStalePairedRepos sees no
+# branch-ahead and also skips. The cascade collapses to just rancher
+# bumping webhook at the existing GA — there is nothing to unRC.
+trigger:
+  leaf_branch: main
+  independents: {}
+
+modules:
+  rancher: [github.com/x/rancher]
+  webhook: [github.com/x/webhook]
+
+repos:
+  x/rancher:
+    gh_repo: x/rancher
+    default_branch: main
+    tags: [v2.15.0]
+    branches:
+      main:
+        files:
+          go.mod: |
+            module github.com/x/rancher
+            go 1.24
+            require github.com/x/webhook v0.7.4
+        ahead_of:
+          v2.15.0: 0
+
+  x/charts:
+    gh_repo: x/charts
+    default_branch: dev-v2.15
+    tags: []
+    branches:
+      dev-v2.15:
+        files: {}
+
+  x/webhook:
+    gh_repo: x/webhook
+    default_branch: main
+    # Latest tag is v0.7.5 (GA). No rc to strip — unrc has nothing to do.
+    tags: [v0.7.5, v0.7.5-rc.1, v0.7.4]
+    branches:
+      main:
+        files:
+          go.mod: |
+            module github.com/x/webhook
+            go 1.24
+        ahead_of:
+          v0.7.5: 0
+    tag_files:
+      v0.7.5:
+        go.mod: |
+          module github.com/x/webhook
+          go 1.24

@@ -96,20 +96,36 @@ func (r *Reconciler) RunCascade(ctx context.Context, leafBranch string, independ
 		return fmt.Errorf("compute cascade stages: %w", err)
 	}
 
-	// Detect paired-latest sources (or their deps) with unreleased commits and
-	// re-run ComputeStages with those repos promoted into the propagation set.
-	// This ensures a committed-but-untagged norman gets a proper bump→tag stage
-	// instead of being silently consumed at webhook's stale paired-latest tag.
+	// Decide which paired-latest sources need their own bump→tag stage instead
+	// of being consumed at their current tag. Two reasons trigger promotion:
+	//
+	//   - branch-ahead / pin-drift (detectStalePairedRepos): the dep has
+	//     unreleased commits or pins a stale upstream — the next release has
+	//     to come from HEAD.
+	//   - unRC (forceUnRCPromotions): the dep's strategy is unrc and its
+	//     latest tag is still an rc — the operator wants the same commit
+	//     re-tagged as GA, which the staleness check would never flag (no
+	//     branch-ahead, no pin-drift) but is the whole point of the unrc
+	//     workflow.
+	//
+	// Both flavors merge into one promote set; ComputeStages re-runs once
+	// with the union.
 	leafMinor := leafTable.LookupMinor(leafBranch)
-	stale, err := r.detectStalePairedRepos(ctx, sources, leafMinor, pairedTables)
+	promote, err := r.detectStalePairedRepos(ctx, sources, leafMinor, pairedTables)
 	if err != nil {
 		log.Printf("cascade: stale detection error (continuing): %v", err)
 	}
-	if len(stale) > 0 {
-		log.Printf("cascade: promoting stale paired repos into propagation: %v", sortedKeys(stale))
-		sources, stages, err = cascade.ComputeStages(r.cfg, independents, leafRepo, leafBranch, leafTable, pairedTables, resolver, stale)
+	if promote == nil {
+		promote = map[string]bool{}
+	}
+	for name := range r.forceUnRCPromotions(sources) {
+		promote[name] = true
+	}
+	if len(promote) > 0 {
+		log.Printf("cascade: promoting paired repos into propagation: %v", sortedKeys(promote))
+		sources, stages, err = cascade.ComputeStages(r.cfg, independents, leafRepo, leafBranch, leafTable, pairedTables, resolver, promote)
 		if err != nil {
-			return fmt.Errorf("compute cascade stages (with stale repos): %w", err)
+			return fmt.Errorf("compute cascade stages (with promoted repos): %w", err)
 		}
 	}
 
@@ -648,6 +664,36 @@ func splitRC(tag string) (string, int, bool) {
 		return tag, 0, false
 	}
 	return tag[:i], n, true
+}
+
+// forceUnRCPromotions returns the paired-latest sources that need a bump→tag
+// stage purely because their strategy is unrc. Unlike detectStalePairedRepos,
+// no branch-ahead or pin-drift signal is consulted — the unrc workflow is
+// "tag this rc'd commit as GA", and the same commit already carrying an rc
+// tag is precisely what makes the re-tag necessary, not a reason to skip it.
+//
+// Promotion is gated on the pinned version actually carrying an -rc.N
+// suffix: when the latest tag is already a GA, there is nothing to unRC and
+// the cascade falls back to propagating the existing GA as paired-latest.
+func (r *Reconciler) forceUnRCPromotions(sources []cascade.Source) map[string]bool {
+	out := map[string]bool{}
+	for _, src := range sources {
+		if src.Explicit {
+			continue
+		}
+		repo, ok := r.cfg.Repos[src.Name]
+		if !ok {
+			continue
+		}
+		if repo.NextTagStrategy != config.NextTagUnRC {
+			continue
+		}
+		if _, _, hasRC := splitRC(src.Version); !hasRC {
+			continue
+		}
+		out[src.Name] = true
+	}
+	return out
 }
 
 // detectStalePairedRepos scans paired-latest sources (and their managed paired
