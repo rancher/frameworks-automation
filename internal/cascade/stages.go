@@ -131,9 +131,11 @@ func ComputeStages(
 		return "", fmt.Errorf("repo %q has unsupported kind %q", repo, rcfg.Kind)
 	}
 
-	// Walk every stage repo's direct deps once. This both shapes the bundles
-	// and discovers paired-latest sources (a paired dep referenced by a stage
-	// repo but not itself in propagation needs a pinned latest tag).
+	// Walk every stage repo's direct deps. This both shapes the bundles and
+	// discovers paired-latest sources (a paired dep referenced by a stage
+	// repo but not itself in propagation needs a pinned latest tag). The
+	// walk is wrapped in a closure so it can be re-run after tag-less
+	// promotions expand stageRepos below.
 	pairedLatest := map[string]string{}
 	addPairedLatest := func(name string) error {
 		if _, seen := pairedLatest[name]; seen {
@@ -162,40 +164,134 @@ func ComputeStages(
 		Strategy             config.Strategy
 	}
 	bundleByRepo := map[string][]stageDep{}
-	for repo := range stageRepos {
-		deps := append([]config.Dep(nil), cfg.Repos[repo].Deps...)
-		sort.Slice(deps, func(i, j int) bool { return deps[i].Name < deps[j].Name })
-		for _, d := range deps {
-			depCfg, ok := cfg.Repos[d.Name]
-			if !ok {
-				continue
-			}
-			// Order edges sequence the DAG (chart blocks rancher) but produce
-			// no in-tree action. Drop them from the bundle here so the bumper
-			// never sees them, while the layer assignment below still folds
-			// them into the topological sort.
-			if d.Strategy == config.StrategyOrder {
-				continue
-			}
-			switch {
-			case explicitSet[d.Name]:
-				bundleByRepo[repo] = append(bundleByRepo[repo], stageDep{
-					Dep: d.Name, Module: cfg.FirstModulePath(d.Name), Version: independents[d.Name], Strategy: d.Strategy,
-				})
-			case propagation[d.Name]:
-				bundleByRepo[repo] = append(bundleByRepo[repo], stageDep{
-					Dep: d.Name, Module: cfg.FirstModulePath(d.Name), Strategy: d.Strategy,
-				})
-			case depCfg.Kind == config.KindPaired:
-				if err := addPairedLatest(d.Name); err != nil {
-					return nil, nil, err
+	runBundleWalk := func() error {
+		bundleByRepo = map[string][]stageDep{}
+		for repo := range stageRepos {
+			deps := append([]config.Dep(nil), cfg.Repos[repo].Deps...)
+			sort.Slice(deps, func(i, j int) bool { return deps[i].Name < deps[j].Name })
+			for _, d := range deps {
+				depCfg, ok := cfg.Repos[d.Name]
+				if !ok {
+					continue
 				}
-				bundleByRepo[repo] = append(bundleByRepo[repo], stageDep{
-					Dep: d.Name, Module: cfg.FirstModulePath(d.Name), Version: pairedLatest[d.Name], Strategy: d.Strategy,
-				})
-			default:
-				// Independent not in user input → out of scope. Skip.
+				// Order edges sequence the DAG (chart blocks rancher) but produce
+				// no in-tree action. Drop them from the bundle here so the bumper
+				// never sees them, while the layer assignment below still folds
+				// them into the topological sort.
+				if d.Strategy == config.StrategyOrder {
+					continue
+				}
+				switch {
+				case explicitSet[d.Name]:
+					bundleByRepo[repo] = append(bundleByRepo[repo], stageDep{
+						Dep: d.Name, Module: cfg.FirstModulePath(d.Name), Version: independents[d.Name], Strategy: d.Strategy,
+					})
+				case propagation[d.Name]:
+					bundleByRepo[repo] = append(bundleByRepo[repo], stageDep{
+						Dep: d.Name, Module: cfg.FirstModulePath(d.Name), Strategy: d.Strategy,
+					})
+				case depCfg.Kind == config.KindPaired:
+					if err := addPairedLatest(d.Name); err != nil {
+						return err
+					}
+					bundleByRepo[repo] = append(bundleByRepo[repo], stageDep{
+						Dep: d.Name, Module: cfg.FirstModulePath(d.Name), Version: pairedLatest[d.Name], Strategy: d.Strategy,
+					})
+				default:
+					// Independent not in user input → out of scope. Skip.
+				}
 			}
+		}
+		return nil
+	}
+
+	// Tag-less paired repos in backward(leaf) can never be consumed at a
+	// paired-latest pin — their branches roll forward without tags
+	// (rancher/charts is the canonical example). When their dep is being
+	// bumped this cascade, they need their own bump stage instead of being
+	// silently dropped. The cache lets repeated promotion passes share the
+	// resolveLatest result; "" means "checked, no published release".
+	tagCache := map[string]string{}
+	findTaglessPromotions := func(movingSet map[string]bool) []string {
+		if resolveLatest == nil {
+			return nil
+		}
+		var out []string
+		for name := range backward {
+			if name == leafRepo {
+				continue
+			}
+			rcfg, ok := cfg.Repos[name]
+			if !ok || rcfg.Kind != config.KindPaired {
+				continue
+			}
+			if propagation[name] || explicitSet[name] {
+				continue
+			}
+			tag, checked := tagCache[name]
+			if !checked {
+				br, err := branchOf(name)
+				if err != nil {
+					continue
+				}
+				v, err := resolveLatest(name, br)
+				if err != nil {
+					continue
+				}
+				tag = v
+				tagCache[name] = v
+			}
+			if tag != "" {
+				continue
+			}
+			for _, d := range rcfg.Deps {
+				if movingSet[d.Name] {
+					out = append(out, name)
+					break
+				}
+			}
+		}
+		return out
+	}
+
+	buildMovingSet := func() map[string]bool {
+		out := make(map[string]bool, len(explicitSet)+len(propagation)+len(staleRepos)+len(pairedLatest))
+		for k := range explicitSet {
+			out[k] = true
+		}
+		for k := range propagation {
+			out[k] = true
+		}
+		for k := range staleRepos {
+			out[k] = true
+		}
+		for k := range pairedLatest {
+			out[k] = true
+		}
+		return out
+	}
+
+	// Pre-pass: a tag-less paired repo consumed via go-get/etc. would
+	// otherwise trip "no published release" inside the bundle walk. Promote
+	// it now (against the early moving set, before pairedLatest is
+	// populated) so the walk sees it as propagation instead.
+	for _, r := range findTaglessPromotions(buildMovingSet()) {
+		propagation[r] = true
+		stageRepos[r] = true
+	}
+
+	const maxTaglessIters = 8
+	for iter := 0; iter < maxTaglessIters; iter++ {
+		if err := runBundleWalk(); err != nil {
+			return nil, nil, err
+		}
+		promote := findTaglessPromotions(buildMovingSet())
+		if len(promote) == 0 {
+			break
+		}
+		for _, r := range promote {
+			propagation[r] = true
+			stageRepos[r] = true
 		}
 	}
 

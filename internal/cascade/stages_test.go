@@ -645,6 +645,105 @@ func TestComputeStages_StaleWebhookProducesChartStage(t *testing.T) {
 	}
 }
 
+func TestComputeStages_TaglessPairedPromotedWhenChildIsPairedLatest(t *testing.T) {
+	// Reproduces the rancher-chart-webhook cascade trigger: no explicit
+	// independents, no stale repos. Webhook resolves to a published tag
+	// (paired-latest source); chart is tag-less (rancher/charts has no
+	// release tags). The planner must promote chart into propagation
+	// because chart's dep (webhook) is in the moving set, otherwise the
+	// chart bump PR is silently skipped — exactly the failure mode that
+	// produced cascade #125 with only a rancher bump.
+	cfg := chartLikeCfg()
+	webhookTbl := &config.VersionTable{Rows: []config.VersionRow{
+		{Branch: "main", Minor: "v0.7", Pair: "v2.15"},
+	}}
+	resolver := fixedResolver(map[string]string{"webhook": "v0.7.4"})
+	sources, stages, err := ComputeStages(cfg,
+		map[string]string{},
+		"rancher", "main", rancherTable(),
+		map[string]*config.VersionTable{"webhook": webhookTbl},
+		resolver, nil,
+	)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(sources) != 1 || sources[0].Name != "webhook" || sources[0].Version != "v0.7.4" || sources[0].Explicit {
+		t.Fatalf("sources: got %+v, want one paired-latest webhook@v0.7.4", sources)
+	}
+	if len(stages) != 2 {
+		t.Fatalf("want 2 stages (chart bump, rancher final), got %d: %+v", len(stages), stages)
+	}
+	// Stage 1: chart bump on dev-v2.15 (template-resolved) with webhook v0.7.4
+	// via chart-bump strategy. Bump-only — rancher consumes chart via order,
+	// so no tag prompt is needed.
+	st1 := stages[0]
+	if len(st1.Bumps) != 1 || st1.Bumps[0].Repo != "chart" {
+		t.Fatalf("stage 1 should bump chart: %+v", st1.Bumps)
+	}
+	if st1.Bumps[0].Branch != "dev-v2.15" {
+		t.Errorf("chart branch should come from branch-template: got %q", st1.Bumps[0].Branch)
+	}
+	if len(st1.Bumps[0].Deps) != 1 ||
+		st1.Bumps[0].Deps[0].Dep != "webhook" ||
+		st1.Bumps[0].Deps[0].Version != "v0.7.4" ||
+		st1.Bumps[0].Deps[0].Strategy != config.StrategyChartBump {
+		t.Errorf("chart bundle should pin webhook v0.7.4 via chart-bump: %+v", st1.Bumps[0].Deps)
+	}
+	if len(st1.Tags) != 0 {
+		t.Errorf("chart stage should be bump-only: %+v", st1.Tags)
+	}
+	// Stage 2 (final): rancher bumps webhook v0.7.4 via bump-webhook. Chart
+	// is order-only so it must not appear in rancher's bundle.
+	st2 := stages[1]
+	if len(st2.Bumps) != 1 || st2.Bumps[0].Repo != "rancher" {
+		t.Fatalf("stage 2 should bump rancher: %+v", st2.Bumps)
+	}
+	foundWebhook := false
+	for _, d := range st2.Bumps[0].Deps {
+		if d.Dep == "webhook" {
+			foundWebhook = true
+			if d.Version != "v0.7.4" || d.Strategy != config.StrategyBumpWebhook {
+				t.Errorf("rancher's webhook dep should be paired-latest v0.7.4 via bump-webhook: %+v", d)
+			}
+		}
+		if d.Dep == "chart" {
+			t.Errorf("rancher bundle must not include chart (order edge): %+v", d)
+		}
+	}
+	if !foundWebhook {
+		t.Errorf("rancher bundle should include webhook: %+v", st2.Bumps[0].Deps)
+	}
+}
+
+func TestComputeStages_TaglessPairedNotPromotedWhenNoChildInScope(t *testing.T) {
+	// chart is tag-less and reachable from rancher, but its only dep is an
+	// independent that isn't being moved (no explicit independents, no
+	// stale). The conditional rule must NOT promote chart — there's
+	// nothing for its bump PR to do — so the planner falls through to the
+	// "nothing to bump" error rather than opening a no-op chart PR.
+	cfg := &config.Config{
+		Repos: map[string]config.Repo{
+			"rancher": {Kind: config.KindLeaf, Repo: "x/rancher", Deps: []config.Dep{
+				{Name: "chart", Strategy: config.StrategyOrder},
+			}},
+			"chart": {Kind: config.KindPaired, Repo: "x/chart",
+				BranchTemplate: "dev-{rancher-minor}",
+				Deps:           deps("unrelated")},
+			"unrelated": {Kind: config.KindIndependent, Repo: "x/unrelated"},
+		},
+	}
+	resolver := fixedResolver(map[string]string{}) // chart and any other lookup → ""
+	_, _, err := ComputeStages(cfg,
+		map[string]string{},
+		"rancher", "main", rancherTable(),
+		map[string]*config.VersionTable{},
+		resolver, nil,
+	)
+	if err == nil {
+		t.Fatal("expected 'nothing to bump' error: tag-less chart should not be promoted when its dep is not in the moving set")
+	}
+}
+
 func TestComputeStages_RejectsPairedAsExplicit(t *testing.T) {
 	cfg := newCfg()
 	_, _, err := ComputeStages(cfg,
