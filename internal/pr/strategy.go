@@ -28,6 +28,7 @@ var strategies = map[config.Strategy]Strategy{
 	config.StrategyGoGet:                      goGetStrategy{},
 	config.StrategyChartBump:                  scriptStrategy{name: "chart-bump", body: scripts.ChartBump},
 	config.StrategyBumpWebhook:                scriptStrategy{name: "bump-webhook", body: scripts.BumpWebhook},
+	config.StrategyChartBumpWebhook:           scriptStrategy{name: "chart-bump-webhook", body: scripts.ChartBumpWebhook},
 	config.StrategyBumpRemotedialerProxy:      scriptStrategy{name: "bump-remotedialer-proxy", body: scripts.BumpRemotedialerProxy},
 	config.StrategyChartBumpRemotedialerProxy: scriptStrategy{name: "chart-bump-remotedialer-proxy", body: scripts.ChartBumpRemotedialerProxy},
 }

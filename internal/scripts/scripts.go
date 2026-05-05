@@ -21,6 +21,9 @@ var ChartBump string
 //go:embed bump-webhook.sh
 var BumpWebhook string
 
+//go:embed chart-bump-webhook.sh
+var ChartBumpWebhook string
+
 //go:embed bump-remotedialer-proxy.sh
 var BumpRemotedialerProxy string
 

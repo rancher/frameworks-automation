@@ -145,10 +145,13 @@ Per-dep `strategy:` selects which procedure mutates the working tree. Defaults
 to `go-get` if omitted. Strategies in the registry today:
 
 - `go-get` (default) — `go get module@version`.
-- `chart-bump` — runs the embedded `chart-bump.sh` against the chart clone.
-  No `go.mod` required.
+- `chart-bump` — generic chart-bump playground stand-in. Currently
+  unreferenced; retained until the registry is pruned.
 - `bump-webhook` — runs the embedded `bump-webhook.sh` against the rancher
-  clone.
+  clone (updates `build.yaml`, runs `go generate`).
+- `chart-bump-webhook` — runs the embedded `chart-bump-webhook.sh` against
+  the chart clone (updates `packages/rancher-webhook/package.yaml`, runs
+  `make charts`, prepends `release.yaml`).
 - `bump-remotedialer-proxy` — runs the embedded
   `bump-remotedialer-proxy.sh` against the rancher clone (updates
   `build.yaml`, regenerates via dapper).

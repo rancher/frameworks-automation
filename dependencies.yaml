@@ -29,8 +29,14 @@
 # deps: upstream repos this repo depends on. Each entry is `{name, strategy}`
 # where strategy defaults to `go-get` if omitted. Strategies:
 #   go-get                          - default; runs `go get module@version`.
-#   chart-bump                      - runs `make upgrade <version>` (no go.mod needed).
-#   bump-webhook                    - runs the rancher-side webhook bump script.
+#   chart-bump                      - generic chart-bump playground stand-in
+#                                     (no longer used by any dep; kept for
+#                                     reference until the registry is pruned).
+#   bump-webhook                    - runs the rancher-side webhook bump script
+#                                     (updates build.yaml, runs `go generate`).
+#   chart-bump-webhook              - runs the chart-side webhook bump script
+#                                     (updates package.yaml, `make charts`,
+#                                     prepends release.yaml).
 #   bump-remotedialer-proxy         - runs the rancher-side remotedialer-proxy
 #                                     bump script (updates build.yaml,
 #                                     regenerates via dapper).
@@ -72,7 +78,7 @@ repos:
     fork: tomleb/rancher-charts
     branch-template: "dev-{rancher-minor}"
     deps:
-      - {name: webhook, strategy: chart-bump}
+      - {name: webhook, strategy: chart-bump-webhook}
       - {name: remotedialer-proxy, strategy: chart-bump-remotedialer-proxy}
   remotedialer-proxy:
     kind: paired

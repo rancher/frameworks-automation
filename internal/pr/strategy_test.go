@@ -15,6 +15,7 @@ func TestLookupStrategy(t *testing.T) {
 		config.StrategyGoGet,
 		config.StrategyChartBump,
 		config.StrategyBumpWebhook,
+		config.StrategyChartBumpWebhook,
 		config.StrategyBumpRemotedialerProxy,
 		config.StrategyChartBumpRemotedialerProxy,
 	} {
