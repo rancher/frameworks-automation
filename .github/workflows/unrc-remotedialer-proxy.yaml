@@ -64,6 +64,7 @@ jobs:
         with:
           app-id: ${{ env.APPID }}
           private-key: ${{ env.PRIVATEKEY }}
+          owner: ${{ github.repository_owner }}
 
       - name: Run reconciler (cascade, unrc remotedialer-proxy)
         env:
