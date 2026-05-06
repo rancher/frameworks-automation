@@ -44,10 +44,10 @@ dependencies.yaml     # the DAG + paired/independent classification
 Credentials:
 
 The workflows pull a GitHub App's `appId` and `privateKey` from Vault
-(`secret/data/github/repo/rancher/${{ github.repository }}/github/pr-actions-write-app/credentials`)
+(`secret/data/github/repo/${{ github.repository }}/github/pr-actions-write-app/credentials`)
 and mint a short-lived installation token via
 [`actions/create-github-app-token`](https://github.com/actions/create-github-app-token).
-The `pr-actions-write-app` App must be installed on every managed repo with
+The App must be installed on every managed repo with
 `Contents: write`, `Pull requests: write`, `Issues: write`, and
 `Metadata: read`. The Go entrypoint reads the token from the `GH_BOT_TOKEN`
 env var.
