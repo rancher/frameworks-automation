@@ -7,7 +7,7 @@ name: Reconciler (bump-pr-merged)
 # to ~15 min on the next cron tick.
 #
 # Payload (client_payload) shape:
-#   { repo: "tomleb/frameworks-automation-steve", pr: "42",
+#   { repo: "rancher/steve", pr: "42",
 #     head_branch: "automation/bump-...", base_branch: "main" }
 #
 # Cron reconciler.yaml is the safety net — this workflow is the optimization.
@@ -66,10 +66,23 @@ jobs:
         # workflows' install method.
         run: sudo snap install yq --channel=v4/stable
 
+      - name: Read App credentials from Vault
+        uses: rancher-eio/read-vault-secrets@main
+        with:
+          secrets: |
+            secret/data/github/repo/rancher/${{ github.repository }}/github/pr-actions-write-app/credentials appId | APPID ;
+            secret/data/github/repo/rancher/${{ github.repository }}/github/pr-actions-write-app/credentials privateKey | PRIVATEKEY
+
+      - name: Mint GitHub App installation token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ env.APPID }}
+          private-key: ${{ env.PRIVATEKEY }}
+          owner: ${{ github.repository_owner }}
+
       - name: Run reconciler (cron)
         env:
           AUTOMATION_REPO: ${{ github.repository }}
-          GH_BOT_TOKEN: ${{ secrets.GH_BOT_TOKEN }}
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-          SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
+          GH_BOT_TOKEN: ${{ steps.app-token.outputs.token }}
         run: go run ./cmd/reconciler -mode=cron

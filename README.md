@@ -18,10 +18,7 @@ For each new upstream release the reconciler:
 1. Walks `dependencies.yaml` to find downstream repos and target branches.
 2. Opens bump PRs (`go get dep@version && go mod tidy`).
 3. Maintains a tracker issue per `(dep, version)` that owns the operation's
-   state (linked PRs, Slack thread `ts`, supersede chain) in a fenced metadata
-   block in the body.
-4. Posts to Slack on every state transition (PR opened, CI red, approved,
-   merged, op complete) — replies stay in-thread via the persisted `ts`.
+   state (linked PRs, supersede chain) in a fenced metadata block in the body.
 
 Humans review and merge PRs. The bot only opens them.
 
@@ -38,23 +35,22 @@ internal/
   drift/              # detect new upstream releases / dep drift
   pr/                 # open + supersede bump PRs
   tracker/            # tracker-issue lifecycle
-  slack/              # transition pings
   reconcile/          # the multi-pass loop tying the above together
 dependencies.yaml     # the DAG + paired/independent classification
 ```
 
 ## Configuration
 
-Repository secrets:
+Credentials:
 
-| Secret | Purpose |
-|--------|---------|
-| `GH_BOT_TOKEN` | PAT (or App token) with `repo`, `issues` on every managed repo. Used to open PRs, manage tracker issues, query PR state. |
-| `SLACK_BOT_TOKEN` | Slack App token with `chat:write`. Used to post + reply in the notification channel. |
-| `SLACK_CHANNEL_ID` | Channel ID (not name) where notifications land. |
-
-For the pilot a PAT is acceptable. Switch to a GitHub App before expanding
-beyond steve.
+The workflows pull a GitHub App's `appId` and `privateKey` from Vault
+(`secret/data/github/repo/rancher/${{ github.repository }}/github/pr-actions-write-app/credentials`)
+and mint a short-lived installation token via
+[`actions/create-github-app-token`](https://github.com/actions/create-github-app-token).
+The `pr-actions-write-app` App must be installed on every managed repo with
+`Contents: write`, `Pull requests: write`, `Issues: write`, and
+`Metadata: read`. The Go entrypoint reads the token from the `GH_BOT_TOKEN`
+env var.
 
 ## Pilot scope
 

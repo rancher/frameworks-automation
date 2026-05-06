@@ -1,7 +1,6 @@
 // Package tracker owns the lifecycle of bump-op tracker issues. The issue
 // body doubles as the state store: a fenced metadata block holds the
-// per-target PR number, last-known PR state, and (later) the Slack thread ts
-// for in-thread replies.
+// per-target PR number and last-known PR state.
 //
 // Tracker identity is (config, dep, version, leaf-branch) — one tracker per
 // bump landing on a specific leaf branch within one config. Lookup is by
@@ -63,9 +62,8 @@ type Target struct {
 // block. Keep YAML tags stable: older runs must read newer files (additive
 // only, never rename or remove a field).
 type Persistent struct {
-	SlackThreadTS string   `yaml:"slack_thread_ts,omitempty"`
-	Targets       []Target `yaml:"targets"`
-	SupersededBy  *int     `yaml:"superseded_by,omitempty"` // tracker issue number
+	Targets      []Target `yaml:"targets"`
+	SupersededBy *int     `yaml:"superseded_by,omitempty"` // tracker issue number
 }
 
 // Title is the canonical issue title for an op. The version is parsed back

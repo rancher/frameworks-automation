@@ -37,7 +37,7 @@ on:
         required: true
 
 env:
-  AUTOMATION_REPO: "tomleb/frameworks-automation"
+  AUTOMATION_REPO: "rancher/frameworks-automation"
 
 jobs:
   dispatch:

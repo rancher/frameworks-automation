@@ -17,7 +17,6 @@ repos:
   rancher:
     kind: leaf
     repo: rancher/rancher
-    fork: tomleb/rancher-rancher
     version-md: |
       | Rancher Branch | Rancher Minor |
       |----------------|---------------|
@@ -33,13 +32,11 @@ repos:
   chart:
     kind: paired
     repo: rancher/charts
-    fork: tomleb/rancher-charts
     branch-template: "dev-{rancher-minor}"
     deps:
       - {name: webhook, strategy: chart-bump-webhook}
   webhook:
     kind: paired
     repo: rancher/webhook
-    fork: tomleb/rancher-webhook
     next-tag-strategy: rc
     deps: []

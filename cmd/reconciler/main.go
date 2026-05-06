@@ -251,8 +251,6 @@ func envSettings() reconcile.Settings {
 		AutomationRepo: requireEnv("AUTOMATION_REPO"),
 		GitHubToken:    requireEnv("GH_BOT_TOKEN"),
 		GitHubActor:    os.Getenv("GITHUB_ACTOR"),
-		SlackToken:     os.Getenv("SLACK_BOT_TOKEN"),
-		SlackChannel:   os.Getenv("SLACK_CHANNEL_ID"),
 	}
 }
 

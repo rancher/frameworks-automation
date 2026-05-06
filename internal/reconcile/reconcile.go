@@ -1,12 +1,12 @@
 // Package reconcile is the orchestration layer: it owns the multi-pass loop
-// and dispatches into the focused packages (drift, pr, tracker, slack).
+// and dispatches into the focused packages (drift, pr, tracker).
 //
 // Pass 1 — detect new upstream releases (or react to a dispatch event) and
 //          open bump PRs in target downstreams. Materialize tracker issues.
-// Pass 2 — poll PR state for every open tracker. Tick checkboxes, post Slack
-//          replies in-thread, close trackers when all targets merged.
+// Pass 2 — poll PR state for every open tracker. Tick checkboxes, close
+//          trackers when all targets merged.
 // Pass 3 — drift check on notify-only branches (independent libs on
-//          release/*). Slack notice once per (dep, version).
+//          release/*).
 package reconcile
 
 import (
@@ -22,9 +22,6 @@ type Settings struct {
 	AutomationRepo string // owner/name where tracker issues live
 	GitHubToken    string
 	GitHubActor    string // login of the user who triggered the workflow; empty for cron
-	// Slack settings are optional during pilot 1.
-	SlackToken   string
-	SlackChannel string
 }
 
 type DispatchEvent struct {
@@ -135,6 +132,6 @@ func (r *Reconciler) pass2(ctx context.Context) error {
 
 func (r *Reconciler) pass3(ctx context.Context) error {
 	// TODO: for each independent dep, check go.mod on every release/* of its
-	// dependents. Slack notice (once per (dep, version)) when drift exists.
+	// dependents.
 	return nil
 }

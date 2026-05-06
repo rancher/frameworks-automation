@@ -9,8 +9,8 @@ see the project-mode plan file.
 When a new tag lands in any managed Rancher repo (rancher, steve, apiserver,
 norman, webhook, remotedialer-proxy, wrangler, lasso, dynamiclistener,
 remotedialer), open dep-bump PRs in every downstream that ships against
-that release line, track each PR end-to-end in a GitHub issue, and ping
-Slack on transitions. Humans review and merge — the bot only opens.
+that release line and track each PR end-to-end in a GitHub issue. Humans
+review and merge — the bot only opens.
 
 A second mode walks the dependency DAG one layer at a time toward a chosen
 leaf-rancher branch, prompting a re-tag at each intermediate layer so every
@@ -41,7 +41,6 @@ flowchart LR
 
     subgraph external["External APIs"]
         gh["GitHub<br/>(issues, PRs, releases)"]
-        slack["Slack<br/>(chat.postMessage)"]
     end
 
     cron --> rec
@@ -52,7 +51,6 @@ flowchart LR
     rec <--> cfg
     rec <--> issues
     rec <--> gh
-    rec --> slack
 ```
 
 The single binary `cmd/reconciler` runs in four modes; the trigger picks
@@ -67,7 +65,7 @@ which one. All modes serialize on a workflow-level concurrency lock
 | `dispatch`        | `repository_dispatch` `tag-emitted`           | Fast path for a tag we just emitted (~30s end-to-end).                   |
 | `bump-dep`        | `workflow_dispatch` `bump-<dep>.yaml`         | Manual fan-out of one (dep, version) onto a chosen leaf branch.          |
 | `cascade`         | `workflow_dispatch` `cascade.yaml`            | Multi-source DAG walk to a leaf branch; prompts re-tag at each layer.    |
-| `validate-config` | CI / local                                    | Parse + validate `dependencies.yaml`; no GitHub or Slack credentials.    |
+| `validate-config` | CI / local                                    | Parse + validate `dependencies.yaml`; no GitHub credentials.             |
 
 CLI flags select the mode and parameters:
 
@@ -114,7 +112,7 @@ Declares the DAG and per-repo policy. Three kinds:
 repos:
   rancher:
     kind: leaf                                                # final consumer
-    module: github.com/tomleb/frameworks-automation-rancher
+    module: github.com/rancher/rancher
     deps:
       - {name: steve}
       - {name: webhook, strategy: bump-webhook}
@@ -122,18 +120,18 @@ repos:
       - {name: chart, strategy: order}                        # sequencing-only edge
   chart:
     kind: paired
-    module: github.com/tomleb/frameworks-automation-chart
+    module: github.com/rancher/charts
     branch-template: "dev-{rancher-minor}"                    # no VERSION.md
     deps:
       - {name: webhook, strategy: chart-bump}
   steve:
     kind: paired                                              # follows VERSION.md to a rancher minor
-    module: github.com/tomleb/frameworks-automation-steve
+    module: github.com/rancher/steve
     deps:
       - {name: wrangler}
   wrangler:
     kind: independent                                         # no rancher pairing
-    module: github.com/tomleb/frameworks-automation-wrangler
+    module: github.com/rancher/wrangler
     deps: []
 ```
 
@@ -205,7 +203,6 @@ the reconciler reads and rewrites each tick:
 - [ ] rancher release/v2.13 — PR #1235 (ci-failing)
 
 <!-- bump-op-state v1
-slack_thread_ts: "1729451234.001900"
 targets:
   - {repo: rancher, branch: main,          pr: 1234, state: open}
   - {repo: rancher, branch: release/v2.13, pr: 1235, state: ci-failing}
@@ -268,8 +265,8 @@ Both variants converge on `runBump`, which:
 
 For every open bump-op tracker, fetch each linked PR, derive its state
 (`open`, `ci-failing`, `approved`, `merged`, `closed`), compare to the
-stored state, post a Slack message in-thread on transition, rewrite the
-body. Close the tracker when every target reaches a terminal state.
+stored state, rewrite the body. Close the tracker when every target reaches
+a terminal state.
 
 ### Pass cascade — advance the cascade DAG
 
@@ -285,9 +282,7 @@ merges. Detail in [Cascade flow](#cascade-flow) below.
 ```go
 type Settings struct {
     AutomationRepo string  // owner/name of this repo (for tracker issues)
-    GitHubToken    string  // PAT or App token with repo, issues, pull_requests
-    SlackToken     string  // optional; empty = silent
-    SlackChannel   string  // channel ID, not name
+    GitHubToken    string  // App installation token with repo, issues, pull_requests
 }
 
 type Reconciler struct {
@@ -318,7 +313,6 @@ sequenceDiagram
     participant rec as Reconciler (dispatch mode)
     participant gh as GitHub
     participant ds as Downstream repo
-    participant slack as Slack
 
     rel->>disp: repository_dispatch tag-emitted {repo, tag, sha}
     disp->>rec: go run -mode=dispatch
@@ -332,7 +326,6 @@ sequenceDiagram
             rec->>ds: clone, go get, commit, push
             rec->>gh: create PR
         end
-        rec->>slack: post "PRs opened" + persist ts
     end
     rec->>rec: remaining passes
 ```
@@ -483,8 +476,7 @@ GetPR / ListOpenPRsByHead / CreatePR / ClosePR
 
 All four workflow files share `concurrency: { group: reconciler,
 cancel-in-progress: false }` so any combination of cron, dispatch, bump-dep,
-and cascade runs serializes. No tracker-issue race; no double-posts to
-Slack.
+and cascade runs serializes. No tracker-issue race.
 
 ## Extension points
 

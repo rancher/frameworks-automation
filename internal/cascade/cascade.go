@@ -4,8 +4,8 @@
 // at each intermediate layer so every layer CIs against the new dep set
 // before the next layer ships.
 //
-// Cascade is self-contained: it owns its own PRs (separate from the
-// per-(dep, version) bump-op trackers) and its own Slack thread. While a
+// Cascade is self-contained: it owns its own PRs, separate from the
+// per-(dep, version) bump-op trackers. While a
 // cascade is active for a leaf branch, the reconciler's auto-dispatch path
 // defers cascade-mid tags to the cascade rather than opening regular bump-op
 // trackers (see pass1 coordination).
@@ -133,11 +133,10 @@ type Op struct {
 // Persistent is what survives between reconciler runs (lives in the metadata
 // block). Additive only — older runs must read newer files.
 type Persistent struct {
-	SlackThreadTS string   `yaml:"slack_thread_ts,omitempty"`
-	TriggeredBy   string   `yaml:"triggered_by,omitempty"`
-	Sources       []Source `yaml:"sources,omitempty"`
-	Stages        []Stage  `yaml:"stages"`
-	CurrentStage  int      `yaml:"current_stage"`
+	TriggeredBy  string   `yaml:"triggered_by,omitempty"`
+	Sources      []Source `yaml:"sources,omitempty"`
+	Stages       []Stage  `yaml:"stages"`
+	CurrentStage int      `yaml:"current_stage"`
 }
 
 // Title is the canonical issue title for a cascade. The (config, leaf,

@@ -9,7 +9,6 @@ import (
 func TestRoundTripState(t *testing.T) {
 	body := "## Cascade\nrancher main\n"
 	in := Persistent{
-		SlackThreadTS: "1729451234.001900",
 		Sources: []Source{
 			{Name: "wrangler", Version: "v0.5.1", Explicit: true},
 			{Name: "steve", Version: "v0.7.5"},
@@ -31,9 +30,6 @@ func TestRoundTripState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("extract: %v", err)
 	}
-	if got.SlackThreadTS != in.SlackThreadTS {
-		t.Errorf("ts: got %q want %q", got.SlackThreadTS, in.SlackThreadTS)
-	}
 	if got.CurrentStage != 1 {
 		t.Errorf("current_stage: got %d want 1", got.CurrentStage)
 	}
@@ -50,14 +46,14 @@ func TestRoundTripState(t *testing.T) {
 
 func TestEmbedReplacesExisting(t *testing.T) {
 	body := "header\n"
-	first, _ := EmbedState(body, Persistent{SlackThreadTS: "111"})
-	second, err := EmbedState(first, Persistent{SlackThreadTS: "222"})
+	first, _ := EmbedState(body, Persistent{TriggeredBy: "alice"})
+	second, err := EmbedState(first, Persistent{TriggeredBy: "bob"})
 	if err != nil {
 		t.Fatalf("embed second: %v", err)
 	}
 	got, _ := ExtractState(second)
-	if got.SlackThreadTS != "222" {
-		t.Errorf("ts after replace: got %q want 222", got.SlackThreadTS)
+	if got.TriggeredBy != "bob" {
+		t.Errorf("triggered_by after replace: got %q want bob", got.TriggeredBy)
 	}
 }
 
@@ -66,7 +62,7 @@ func TestExtractMissingBlock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error for missing block, got: %v", err)
 	}
-	if got.SlackThreadTS != "" || len(got.Stages) != 0 {
+	if len(got.Stages) != 0 || got.TriggeredBy != "" {
 		t.Errorf("expected zero state, got %+v", got)
 	}
 }

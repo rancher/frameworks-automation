@@ -9,7 +9,6 @@ import (
 func TestRoundTripState(t *testing.T) {
 	body := "## Trigger\nsteve v0.7.5 released\n"
 	in := Persistent{
-		SlackThreadTS: "1729451234.001900",
 		Targets: []Target{
 			{Repo: "rancher", Branch: "main", PR: 1234, State: "open"},
 			{Repo: "rancher", Branch: "release/v2.13", PR: 1235, State: "open"},
@@ -23,9 +22,6 @@ func TestRoundTripState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("extract: %v", err)
 	}
-	if got.SlackThreadTS != in.SlackThreadTS {
-		t.Errorf("ts: got %q want %q", got.SlackThreadTS, in.SlackThreadTS)
-	}
 	if len(got.Targets) != 2 || got.Targets[0].PR != 1234 || got.Targets[1].Branch != "release/v2.13" {
 		t.Errorf("targets: got %+v", got.Targets)
 	}
@@ -33,14 +29,15 @@ func TestRoundTripState(t *testing.T) {
 
 func TestEmbedReplacesExisting(t *testing.T) {
 	body := "header\n"
-	first, _ := EmbedState(body, Persistent{SlackThreadTS: "111"})
-	second, err := EmbedState(first, Persistent{SlackThreadTS: "222"})
+	one, two := 111, 222
+	first, _ := EmbedState(body, Persistent{SupersededBy: &one})
+	second, err := EmbedState(first, Persistent{SupersededBy: &two})
 	if err != nil {
 		t.Fatalf("embed second: %v", err)
 	}
 	got, _ := ExtractState(second)
-	if got.SlackThreadTS != "222" {
-		t.Errorf("ts after replace: got %q want 222", got.SlackThreadTS)
+	if got.SupersededBy == nil || *got.SupersededBy != 222 {
+		t.Errorf("superseded_by after replace: got %v want 222", got.SupersededBy)
 	}
 }
 
@@ -49,7 +46,7 @@ func TestExtractMissingBlock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error for missing block, got: %v", err)
 	}
-	if got.SlackThreadTS != "" || len(got.Targets) != 0 {
+	if len(got.Targets) != 0 || got.SupersededBy != nil {
 		t.Errorf("expected zero state, got %+v", got)
 	}
 }
