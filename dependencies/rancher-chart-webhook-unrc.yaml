@@ -18,6 +18,7 @@ repos:
   rancher:
     kind: leaf
     repo: rancher/rancher
+    token-env: GH_TOKEN_RANCHER
     version-md: |
       | Rancher Branch | Rancher Minor |
       |----------------|---------------|
@@ -33,11 +34,13 @@ repos:
   chart:
     kind: paired
     repo: rancher/charts
+    token-env: GH_TOKEN_CHART
     branch-template: "dev-{rancher-minor}"
     deps:
       - {name: webhook, strategy: chart-bump-webhook}
   webhook:
     kind: paired
     repo: rancher/webhook
+    token-env: GH_TOKEN_WEBHOOK
     next-tag-strategy: unrc
     deps: []

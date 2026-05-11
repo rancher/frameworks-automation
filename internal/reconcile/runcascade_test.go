@@ -58,7 +58,7 @@ func runFixture(t *testing.T, dir string) {
 
 	settings := Settings{
 		AutomationRepo: state.AutomationRepo,
-		GitHubToken:    "fake-token",
+		Tokens:         map[string]string{state.AutomationRepo: "fake-token"},
 		GitHubActor:    state.GitHubActor,
 	}
 	r := newWithDeps(testConfigName, cfg, settings, gh, bumper)

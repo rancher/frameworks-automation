@@ -14,6 +14,7 @@ import (
 )
 
 var repoFormat = regexp.MustCompile(`^[^/]+/[^/]+$`)
+var envVarFormat = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
 
 type Kind string
 
@@ -78,6 +79,12 @@ type Repo struct {
 	// Fork, when set, causes bump branches to be pushed to this fork and PRs
 	// opened as cross-repo PRs (head = "<fork-owner>:<branch>", base on Repo).
 	Fork string `yaml:"fork,omitempty"`
+	// TokenEnv names the environment variable holding the per-repo
+	// fine-grained GitHub token used for clone/push and PR API calls against
+	// this repo. The Vault-backed token at
+	// `github/token/<owner>--<name>--pull_requests--write` is exported under
+	// this name by the .github/actions/mint-tokens composite action.
+	TokenEnv string `yaml:"token-env"`
 	// BranchTemplate, when set on a paired repo, replaces the VERSION.md
 	// branch-resolution path. Only "{rancher-minor}" is recognized — it's
 	// filled from the leaf rancher branch's own VERSION.md row. Used for
@@ -176,6 +183,11 @@ func LoadAll(dir string) (map[string]*Config, error) {
 // applyDefaults fills omitted Strategy values with StrategyGoGet so the rest
 // of the code can read Dep.Strategy without nil-checking. Also defaults
 // Repo.NextTagStrategy to NextTagPatch. Mutates in place.
+//
+// Repo.TokenEnv is intentionally left empty when omitted — the binary falls
+// back to the workflow's built-in GITHUB_TOKEN at lookup time. Production
+// configs set TokenEnv explicitly so each repo binds to its dedicated
+// Vault-minted token.
 func (c *Config) applyDefaults() {
 	for name, r := range c.Repos {
 		for i := range r.Deps {
@@ -205,6 +217,11 @@ func (c *Config) validate() error {
 		}
 		if r.Fork != "" && !repoFormat.MatchString(r.Fork) {
 			return fmt.Errorf("repo %q: fork %q must be owner/name", name, r.Fork)
+		}
+		// token-env is optional: when empty the binary falls back to the
+		// workflow's GITHUB_TOKEN. Format-check only when set explicitly.
+		if r.TokenEnv != "" && !envVarFormat.MatchString(r.TokenEnv) {
+			return fmt.Errorf("repo %q: token-env %q must match %s", name, r.TokenEnv, envVarFormat)
 		}
 		if r.BranchTemplate != "" {
 			if r.Kind != KindPaired {

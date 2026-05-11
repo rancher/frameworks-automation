@@ -53,6 +53,7 @@ repos:
   rancher:
     kind: leaf
     repo: rancher/rancher
+    token-env: GH_TOKEN_RANCHER
     version-md: |
       | Rancher Branch | Rancher Minor |
       |----------------|---------------|
@@ -73,6 +74,7 @@ repos:
   chart:
     kind: paired
     repo: rancher/charts
+    token-env: GH_TOKEN_CHART
     branch-template: "dev-{rancher-minor}"
     deps:
       - {name: webhook, strategy: chart-bump-webhook}
@@ -80,12 +82,14 @@ repos:
   remotedialer-proxy:
     kind: paired
     repo: rancher/remotedialer-proxy
+    token-env: GH_TOKEN_REMOTEDIALER_PROXY
     next-tag-strategy: rc
     deps:
       - {name: wrangler}
   webhook:
     kind: paired
     repo: rancher/webhook
+    token-env: GH_TOKEN_WEBHOOK
     next-tag-strategy: rc
     deps:
       - {name: norman}
@@ -93,6 +97,7 @@ repos:
   steve:
     kind: paired
     repo: rancher/steve
+    token-env: GH_TOKEN_STEVE
     deps:
       - {name: apiserver}
       - {name: norman}
@@ -100,14 +105,17 @@ repos:
   apiserver:
     kind: paired
     repo: rancher/apiserver
+    token-env: GH_TOKEN_APISERVER
     deps:
       - {name: wrangler}
   norman:
     kind: paired
     repo: rancher/norman
+    token-env: GH_TOKEN_NORMAN
     deps:
       - {name: wrangler}
   wrangler:
     kind: independent
     repo: rancher/wrangler
+    token-env: GH_TOKEN_WRANGLER
     deps: []
