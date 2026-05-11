@@ -20,8 +20,12 @@ import (
 
 type Settings struct {
 	AutomationRepo string // owner/name where tracker issues live
-	GitHubToken    string
-	GitHubActor    string // login of the user who triggered the workflow; empty for cron
+	// Tokens maps GitHub owner/name → fine-grained PAT/installation token.
+	// Every repo the reconciler reads or writes must have an entry, including
+	// AutomationRepo (its slot holds the workflow's built-in GITHUB_TOKEN
+	// used for tracker-issue management).
+	Tokens      map[string]string
+	GitHubActor string // login of the user who triggered the workflow; empty for cron
 }
 
 type DispatchEvent struct {
@@ -75,11 +79,14 @@ func New(configName string, cfg *config.Config, s Settings) (*Reconciler, error)
 	if s.AutomationRepo == "" {
 		return nil, fmt.Errorf("AutomationRepo is required")
 	}
-	if s.GitHubToken == "" {
-		return nil, fmt.Errorf("GitHubToken is required")
+	if len(s.Tokens) == 0 {
+		return nil, fmt.Errorf("Tokens is required")
 	}
-	gh := ghclient.NewClient(context.Background(), s.GitHubToken)
-	return newWithDeps(configName, cfg, s, gh, pr.NewBumper(gh, s.GitHubToken)), nil
+	if t, ok := s.Tokens[s.AutomationRepo]; !ok || t == "" {
+		return nil, fmt.Errorf("Tokens missing entry for AutomationRepo %q", s.AutomationRepo)
+	}
+	gh := ghclient.NewClient(context.Background(), s.Tokens)
+	return newWithDeps(configName, cfg, s, gh, pr.NewBumper(gh, s.Tokens)), nil
 }
 
 // newWithDeps wires a Reconciler with caller-supplied collaborators. Used by

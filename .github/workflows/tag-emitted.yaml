@@ -27,6 +27,7 @@ jobs:
     permissions:
       contents: read
       id-token: write  # rancher-eio/read-vault-secrets uses OIDC
+      issues: write    # tracker issues live in this repo
     steps:
       - name: Validate payload
         env:
@@ -55,22 +56,12 @@ jobs:
         # workflows' install method.
         run: sudo snap install yq --channel=v4/stable
 
-      - uses: rancher-eio/read-vault-secrets@0da85151ad1f19ed7986c41587e45aac1ace74b6 # v3
-        with:
-          secrets: |
-            secret/data/github/repo/${{ github.repository }}/github/pr-actions-write-app/credentials appId | APPID ;
-            secret/data/github/repo/${{ github.repository }}/github/pr-actions-write-app/credentials privateKey | PRIVATEKEY
-
-      - uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
-        id: app-token
-        with:
-          app-id: ${{ env.APPID }}
-          private-key: ${{ env.PRIVATEKEY }}
+      - uses: ./.github/actions/mint-tokens
 
       - name: Run reconciler (dispatch)
         env:
           AUTOMATION_REPO: ${{ github.repository }}
-          GH_BOT_TOKEN: ${{ steps.app-token.outputs.token }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           go run ./cmd/reconciler \
             -mode=dispatch \

@@ -71,9 +71,9 @@ func main() {
 		return
 	}
 
-	settings := envSettings()
+	settings := envSettings(cfgs)
 	ctx := context.Background()
-	gh := ghclient.NewClient(ctx, settings.GitHubToken)
+	gh := ghclient.NewClient(ctx, settings.Tokens)
 
 	reconcilers := make(map[string]*reconcile.Reconciler, len(cfgs))
 	for _, name := range sortedNames(cfgs) {
@@ -246,10 +246,36 @@ func parseIndependents(s string) (map[string]string, error) {
 	return out, nil
 }
 
-func envSettings() reconcile.Settings {
+// envSettings collects runtime config from env. AUTOMATION_REPO names this
+// repo; GITHUB_TOKEN is the workflow's built-in token — it covers tracker
+// issues here AND any repo whose config omits `token-env:` (a fallback
+// useful for tests and local dry-runs). Production configs set `token-env:`
+// per repo to bind each one to its dedicated Vault-minted token, which the
+// .github/actions/mint-tokens composite action exports.
+func envSettings(cfgs map[string]*config.Config) reconcile.Settings {
+	automationRepo := requireEnv("AUTOMATION_REPO")
+	defaultToken := requireEnv("GITHUB_TOKEN")
+	tokens := map[string]string{automationRepo: defaultToken}
+	for _, name := range sortedNames(cfgs) {
+		for repoKey, r := range cfgs[name].Repos {
+			tok := defaultToken
+			if r.TokenEnv != "" {
+				tok = os.Getenv(r.TokenEnv)
+				if tok == "" {
+					fmt.Fprintf(os.Stderr, "missing required env: %s (config=%s repo=%s)\n", r.TokenEnv, name, repoKey)
+					os.Exit(2)
+				}
+			}
+			if existing, ok := tokens[r.Repo]; ok && existing != tok {
+				fmt.Fprintf(os.Stderr, "conflicting tokens for %s across configs (env vars resolve differently)\n", r.Repo)
+				os.Exit(2)
+			}
+			tokens[r.Repo] = tok
+		}
+	}
 	return reconcile.Settings{
-		AutomationRepo: requireEnv("AUTOMATION_REPO"),
-		GitHubToken:    requireEnv("GH_BOT_TOKEN"),
+		AutomationRepo: automationRepo,
+		Tokens:         tokens,
 		GitHubActor:    os.Getenv("GITHUB_ACTOR"),
 	}
 }

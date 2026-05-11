@@ -13,6 +13,7 @@ repos:
   rancher:
     kind: leaf
     repo: rancher/rancher
+    token-env: GH_TOKEN_RANCHER
     version-md: |
       | Rancher Branch | Rancher Minor |
       |----------------|---------------|
@@ -28,11 +29,13 @@ repos:
   chart:
     kind: paired
     repo: rancher/charts
+    token-env: GH_TOKEN_CHART
     branch-template: "dev-{rancher-minor}"
     deps:
       - {name: remotedialer-proxy, strategy: chart-bump-remotedialer-proxy}
   remotedialer-proxy:
     kind: paired
     repo: rancher/remotedialer-proxy
+    token-env: GH_TOKEN_REMOTEDIALER_PROXY
     next-tag-strategy: rc
     deps: []

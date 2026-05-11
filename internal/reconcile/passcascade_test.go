@@ -139,7 +139,7 @@ func TestTryClaimCascadeTag_ScopedByConfig(t *testing.T) {
 		cascade.Title("other", "rancher", "main"), body(otherOp),
 		cascade.Labels("other", "rancher", "main"), nil)
 
-	r := newWithDeps("test", cfg, Settings{AutomationRepo: "owner/auto", GitHubToken: "x"}, gh, newFakeBumper(gh))
+	r := newWithDeps("test", cfg, Settings{AutomationRepo: "owner/auto", Tokens: map[string]string{"owner/auto": "x"}}, gh, newFakeBumper(gh))
 
 	claimed, err := r.tryClaimCascadeTag(context.Background(), "webhook", "v0.7.0")
 	if err != nil {

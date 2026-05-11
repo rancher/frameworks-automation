@@ -14,16 +14,47 @@ import (
 	"golang.org/x/oauth2"
 )
 
+// Client multiplexes per-repo go-github clients. Each call routes to the
+// client backed by the token configured for that repo's owner/name; an
+// unauthenticated client backs anything not in the map (read-only public
+// access, used as a defensive fallback — every repo we actually write to
+// must have a token).
 type Client struct {
-	gh *gh.Client
+	tokens     map[string]string  // owner/name → token
+	byToken    map[string]*gh.Client
+	unauthed   *gh.Client
 }
 
-func NewClient(ctx context.Context, token string) *Client {
-	if token == "" {
-		return &Client{gh: gh.NewClient(nil)}
+// NewClient builds a multi-client. tokens is keyed by GitHub owner/name; one
+// go-github client is constructed per unique token value (so two repos that
+// share a token share one client). Pass an empty map for tests/local runs
+// that only need unauthenticated reads of public repos.
+func NewClient(ctx context.Context, tokens map[string]string) *Client {
+	c := &Client{
+		tokens:   make(map[string]string, len(tokens)),
+		byToken:  map[string]*gh.Client{},
+		unauthed: gh.NewClient(nil),
 	}
-	tc := oauth2.NewClient(ctx, oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token}))
-	return &Client{gh: gh.NewClient(tc)}
+	for repo, t := range tokens {
+		c.tokens[repo] = t
+		if t == "" {
+			continue
+		}
+		if _, ok := c.byToken[t]; ok {
+			continue
+		}
+		tc := oauth2.NewClient(ctx, oauth2.StaticTokenSource(&oauth2.Token{AccessToken: t}))
+		c.byToken[t] = gh.NewClient(tc)
+	}
+	return c
+}
+
+func (c *Client) clientFor(repo string) *gh.Client {
+	t, ok := c.tokens[repo]
+	if !ok || t == "" {
+		return c.unauthed
+	}
+	return c.byToken[t]
 }
 
 // FetchFile returns the decoded contents of `path` in `repo` at `ref`. `ref`
@@ -37,7 +68,7 @@ func (c *Client) FetchFile(ctx context.Context, repo, ref, path string) (string,
 	if ref != "" {
 		opt = &gh.RepositoryContentGetOptions{Ref: ref}
 	}
-	f, _, _, err := c.gh.Repositories.GetContents(ctx, owner, name, path, opt)
+	f, _, _, err := c.clientFor(repo).Repositories.GetContents(ctx, owner, name, path, opt)
 	if err != nil {
 		return "", fmt.Errorf("get %s/%s@%s: %w", repo, path, ref, err)
 	}
@@ -59,7 +90,7 @@ func (c *Client) GetLatestReleaseTag(ctx context.Context, repo string) (string, 
 	if err != nil {
 		return "", err
 	}
-	rel, resp, err := c.gh.Repositories.GetLatestRelease(ctx, owner, name)
+	rel, resp, err := c.clientFor(repo).Repositories.GetLatestRelease(ctx, owner, name)
 	if err != nil {
 		if resp != nil && resp.StatusCode == 404 {
 			return "", nil
@@ -78,7 +109,7 @@ func (c *Client) ListReleaseTags(ctx context.Context, repo string) ([]string, er
 	if err != nil {
 		return nil, err
 	}
-	rels, _, err := c.gh.Repositories.ListReleases(ctx, owner, name, &gh.ListOptions{PerPage: 100})
+	rels, _, err := c.clientFor(repo).Repositories.ListReleases(ctx, owner, name, &gh.ListOptions{PerPage: 100})
 	if err != nil {
 		return nil, fmt.Errorf("list releases %s: %w", repo, err)
 	}
@@ -122,7 +153,7 @@ func (c *Client) listIssues(ctx context.Context, repo string, labels []string, s
 	if err != nil {
 		return nil, err
 	}
-	issues, _, err := c.gh.Issues.ListByRepo(ctx, owner, name, &gh.IssueListByRepoOptions{
+	issues, _, err := c.clientFor(repo).Issues.ListByRepo(ctx, owner, name, &gh.IssueListByRepoOptions{
 		Labels:      labels,
 		State:       state,
 		ListOptions: gh.ListOptions{PerPage: 100},
@@ -152,7 +183,7 @@ func (c *Client) CreateIssue(ctx context.Context, repo, title, body string, labe
 	if assignees == nil {
 		assignees = []string{}
 	}
-	issue, _, err := c.gh.Issues.Create(ctx, owner, name, &gh.IssueRequest{
+	issue, _, err := c.clientFor(repo).Issues.Create(ctx, owner, name, &gh.IssueRequest{
 		Title:     &title,
 		Body:      &body,
 		Labels:    &labels,
@@ -174,7 +205,7 @@ func (c *Client) AddPRAssignees(ctx context.Context, repo string, number int, as
 	if err != nil {
 		return err
 	}
-	if _, _, err := c.gh.Issues.AddAssignees(ctx, owner, name, number, assignees); err != nil {
+	if _, _, err := c.clientFor(repo).Issues.AddAssignees(ctx, owner, name, number, assignees); err != nil {
 		return fmt.Errorf("add assignees to %s#%d: %w", repo, number, err)
 	}
 	return nil
@@ -185,7 +216,7 @@ func (c *Client) UpdateIssueBody(ctx context.Context, repo string, number int, b
 	if err != nil {
 		return err
 	}
-	_, _, err = c.gh.Issues.Edit(ctx, owner, name, number, &gh.IssueRequest{Body: &body})
+	_, _, err = c.clientFor(repo).Issues.Edit(ctx, owner, name, number, &gh.IssueRequest{Body: &body})
 	if err != nil {
 		return fmt.Errorf("edit issue %s#%d: %w", repo, number, err)
 	}
@@ -200,12 +231,12 @@ func (c *Client) CloseIssue(ctx context.Context, repo string, number int, commen
 		return err
 	}
 	if comment != "" {
-		if _, _, err := c.gh.Issues.CreateComment(ctx, owner, name, number, &gh.IssueComment{Body: &comment}); err != nil {
+		if _, _, err := c.clientFor(repo).Issues.CreateComment(ctx, owner, name, number, &gh.IssueComment{Body: &comment}); err != nil {
 			return fmt.Errorf("comment on %s#%d before close: %w", repo, number, err)
 		}
 	}
 	state := "closed"
-	if _, _, err := c.gh.Issues.Edit(ctx, owner, name, number, &gh.IssueRequest{State: &state}); err != nil {
+	if _, _, err := c.clientFor(repo).Issues.Edit(ctx, owner, name, number, &gh.IssueRequest{State: &state}); err != nil {
 		return fmt.Errorf("close issue %s#%d: %w", repo, number, err)
 	}
 	return nil
@@ -228,7 +259,7 @@ func (c *Client) GetPR(ctx context.Context, repo string, number int) (*PR, error
 	if err != nil {
 		return nil, err
 	}
-	pr, _, err := c.gh.PullRequests.Get(ctx, owner, name, number)
+	pr, _, err := c.clientFor(repo).PullRequests.Get(ctx, owner, name, number)
 	if err != nil {
 		return nil, fmt.Errorf("get PR %s#%d: %w", repo, number, err)
 	}
@@ -246,7 +277,7 @@ func (c *Client) ListOpenPRsByHead(ctx context.Context, repo, head string) ([]*P
 	if err != nil {
 		return nil, err
 	}
-	prs, _, err := c.gh.PullRequests.List(ctx, owner, name, &gh.PullRequestListOptions{
+	prs, _, err := c.clientFor(repo).PullRequests.List(ctx, owner, name, &gh.PullRequestListOptions{
 		State:       "open",
 		Head:        head,
 		ListOptions: gh.ListOptions{PerPage: 50},
@@ -266,7 +297,7 @@ func (c *Client) CreatePR(ctx context.Context, repo, title, body, head, base str
 	if err != nil {
 		return nil, err
 	}
-	pr, _, err := c.gh.PullRequests.Create(ctx, owner, name, &gh.NewPullRequest{
+	pr, _, err := c.clientFor(repo).PullRequests.Create(ctx, owner, name, &gh.NewPullRequest{
 		Title: &title,
 		Body:  &body,
 		Head:  &head,
@@ -286,7 +317,7 @@ func (c *Client) CommitsAheadOf(ctx context.Context, repo, base, head string) (i
 	if err != nil {
 		return 0, err
 	}
-	cmp, _, err := c.gh.Repositories.CompareCommits(ctx, owner, name, base, head, nil)
+	cmp, _, err := c.clientFor(repo).Repositories.CompareCommits(ctx, owner, name, base, head, nil)
 	if err != nil {
 		return 0, fmt.Errorf("compare %s %s...%s: %w", repo, base, head, err)
 	}
@@ -300,7 +331,7 @@ func (c *Client) DeleteBranch(ctx context.Context, repo, branch string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := c.gh.Git.DeleteRef(ctx, owner, name, "refs/heads/"+branch); err != nil {
+	if _, err := c.clientFor(repo).Git.DeleteRef(ctx, owner, name, "refs/heads/"+branch); err != nil {
 		return fmt.Errorf("delete branch %s in %s: %w", branch, repo, err)
 	}
 	return nil
@@ -314,12 +345,12 @@ func (c *Client) ClosePR(ctx context.Context, repo string, number int, comment s
 		return err
 	}
 	if comment != "" {
-		if _, _, err := c.gh.Issues.CreateComment(ctx, owner, name, number, &gh.IssueComment{Body: &comment}); err != nil {
+		if _, _, err := c.clientFor(repo).Issues.CreateComment(ctx, owner, name, number, &gh.IssueComment{Body: &comment}); err != nil {
 			return fmt.Errorf("comment on %s#%d before close: %w", repo, number, err)
 		}
 	}
 	state := "closed"
-	if _, _, err := c.gh.PullRequests.Edit(ctx, owner, name, number, &gh.PullRequest{State: &state}); err != nil {
+	if _, _, err := c.clientFor(repo).PullRequests.Edit(ctx, owner, name, number, &gh.PullRequest{State: &state}); err != nil {
 		return fmt.Errorf("close PR %s#%d: %w", repo, number, err)
 	}
 	return nil
@@ -333,7 +364,7 @@ func (c *Client) GetGoModPaths(ctx context.Context, repo string) ([]string, erro
 	if err != nil {
 		return nil, err
 	}
-	tree, _, err := c.gh.Git.GetTree(ctx, owner, name, "HEAD", true)
+	tree, _, err := c.clientFor(repo).Git.GetTree(ctx, owner, name, "HEAD", true)
 	if err != nil {
 		return nil, fmt.Errorf("get tree %s: %w", repo, err)
 	}

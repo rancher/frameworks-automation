@@ -1,0 +1,28 @@
+name: Mint per-repo GitHub tokens from Vault
+description: |
+  Reads every per-repo `pull_requests--write` token from Vault and exports
+  it as a `GH_TOKEN_<NAME>` env var. Single source of truth for the Vault
+  path → env-var mapping consumed by the reconciler binary via each repo's
+  `token-env:` field in dependencies/*.yaml.
+
+  When you add a managed repo to a dependencies/ config, add its line here
+  too — and grant the workflow `id-token: write` so the OIDC handshake to
+  Vault succeeds.
+
+runs:
+  using: composite
+  steps:
+    - uses: rancher-eio/read-vault-secrets@0da85151ad1f19ed7986c41587e45aac1ace74b6 # v3
+      with:
+        secrets: |
+          github/token/rancher--apiserver--pull_requests--write           token | GH_TOKEN_APISERVER ;
+          github/token/rancher--charts--pull_requests--write              token | GH_TOKEN_CHART ;
+          github/token/rancher--dynamiclistener--pull_requests--write     token | GH_TOKEN_DYNAMICLISTENER ;
+          github/token/rancher--lasso--pull_requests--write               token | GH_TOKEN_LASSO ;
+          github/token/rancher--norman--pull_requests--write              token | GH_TOKEN_NORMAN ;
+          github/token/rancher--rancher--pull_requests--write             token | GH_TOKEN_RANCHER ;
+          github/token/rancher--remotedialer--pull_requests--write        token | GH_TOKEN_REMOTEDIALER ;
+          github/token/rancher--remotedialer-proxy--pull_requests--write  token | GH_TOKEN_REMOTEDIALER_PROXY ;
+          github/token/rancher--steve--pull_requests--write               token | GH_TOKEN_STEVE ;
+          github/token/rancher--webhook--pull_requests--write             token | GH_TOKEN_WEBHOOK ;
+          github/token/rancher--wrangler--pull_requests--write            token | GH_TOKEN_WRANGLER

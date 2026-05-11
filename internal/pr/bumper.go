@@ -25,12 +25,12 @@ const (
 )
 
 type Bumper struct {
-	gh    *ghclient.Client
-	token string // PAT/App token, used in the git clone URL
+	gh     *ghclient.Client
+	tokens map[string]string // owner/name → fine-grained token, used in the git clone URL
 }
 
-func NewBumper(gh *ghclient.Client, token string) *Bumper {
-	return &Bumper{gh: gh, token: token}
+func NewBumper(gh *ghclient.Client, tokens map[string]string) *Bumper {
+	return &Bumper{gh: gh, tokens: tokens}
 }
 
 // Request describes a single bump-PR job. Modules may carry one entry (the
@@ -161,16 +161,20 @@ func (b *Bumper) Open(ctx context.Context, req Request) (*Result, error) {
 	pushRemote := "origin"
 	prHead := req.HeadBranch
 	if req.Fork != "" {
-		forkURL := fmt.Sprintf("https://x-access-token:%s@github.com/%s.git", b.token, req.Fork)
+		forkToken, ok := b.tokens[req.Fork]
+		if !ok || forkToken == "" {
+			return nil, fmt.Errorf("no token configured for fork %s", req.Fork)
+		}
+		forkURL := fmt.Sprintf("https://x-access-token:%s@github.com/%s.git", forkToken, req.Fork)
 		if err := run(ctx, repoDir, nil, "git", "remote", "add", "fork", forkURL); err != nil {
-			return nil, scrubToken(err, b.token)
+			return nil, b.scrubAllTokens(err)
 		}
 		pushRemote = "fork"
 		forkOwner := strings.SplitN(req.Fork, "/", 2)[0]
 		prHead = forkOwner + ":" + req.HeadBranch
 	}
 	if err := run(ctx, repoDir, nil, "git", "push", "-u", pushRemote, req.HeadBranch); err != nil {
-		return nil, scrubToken(err, b.token)
+		return nil, b.scrubAllTokens(err)
 	}
 
 	pr, err := b.gh.CreatePR(ctx, req.Repo,
@@ -210,11 +214,15 @@ func (b *Bumper) findExistingPR(ctx context.Context, req Request) (*ghclient.PR,
 }
 
 func (b *Bumper) clone(ctx context.Context, repo, branch, dir string) error {
-	url := fmt.Sprintf("https://x-access-token:%s@github.com/%s.git", b.token, repo)
+	token, ok := b.tokens[repo]
+	if !ok || token == "" {
+		return fmt.Errorf("no token configured for %s", repo)
+	}
+	url := fmt.Sprintf("https://x-access-token:%s@github.com/%s.git", token, repo)
 	// --depth=1 keeps the clone fast; we don't need history to bump a dep.
 	if err := run(ctx, "", nil, "git", "clone", "--depth=1", "--branch="+branch, url, dir); err != nil {
 		// Don't leak the token in the error.
-		return fmt.Errorf("clone %s@%s: %w", repo, branch, scrubToken(err, b.token))
+		return fmt.Errorf("clone %s@%s: %w", repo, branch, b.scrubAllTokens(err))
 	}
 	return nil
 }
@@ -298,11 +306,18 @@ func run(ctx context.Context, dir string, extraEnv []string, name string, args .
 	return nil
 }
 
-func scrubToken(err error, token string) error {
-	if token == "" {
+func (b *Bumper) scrubAllTokens(err error) error {
+	s := err.Error()
+	for _, t := range b.tokens {
+		if t == "" {
+			continue
+		}
+		s = strings.ReplaceAll(s, t, "***")
+	}
+	if s == err.Error() {
 		return err
 	}
-	return errors.New(strings.ReplaceAll(err.Error(), token, "***"))
+	return errors.New(s)
 }
 
 func buildPRBody(req Request) string {
