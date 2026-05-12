@@ -6,6 +6,8 @@ import (
 	"log"
 	"strings"
 
+	"golang.org/x/mod/semver"
+
 	"github.com/rancher/release-automation/internal/cascade"
 	ghclient "github.com/rancher/release-automation/internal/github"
 )
@@ -65,6 +67,10 @@ func (r *Reconciler) advanceCascade(ctx context.Context, issue *ghclient.Issue) 
 	// Idempotent on healed cascades.
 	fillBumpDepsFromPriorTags(&op, op.CurrentStage)
 	if _, err := r.openCascadeStageBumps(ctx, &op, op.CurrentStage, issue.Number, issue.URL); err != nil {
+		return err
+	}
+
+	if _, err := r.pollCascadeTags(ctx, &op, issue.Number); err != nil {
 		return err
 	}
 
@@ -236,6 +242,96 @@ func fillBumpDepsFromPriorTags(op *cascade.Op, idx int) {
 			}
 		}
 	}
+}
+
+// pollCascadeTags is the cron safety net for cascade tag prompts. For each
+// unclaimed TagPrompt in the current stage, scans the prompt repo's
+// published releases and claims the highest tag at or above the prompt's
+// Expected hint (and on the same minor lineage as Expected).
+//
+// Covers two gaps in the dispatch path:
+//   - the source repo's Release workflow doesn't dispatch tag-emitted back
+//     here, so tryClaimCascadeTag is never invoked for that release;
+//   - the released tag is a pre-release, which the pass1Cron upstream sweep
+//     filters out via GetLatestReleaseTag (`/releases/latest` excludes
+//     prereleases by design).
+//
+// Same merged-bumps gate as tryClaimCascadeTag: a tag emitted before the
+// stage's bumps merge is unrelated to this stage's release and must not be
+// accepted — claiming it would short-circuit the bump→tag ordering.
+//
+// Anchoring on Expected (rather than "latest tag on this branch") avoids
+// claiming a stale prior-cycle tag whose go.mod doesn't yet have this
+// cascade's bump merged in — Expected is set at cascade creation from the
+// repo's release history, so any tag at or above it post-dates the cascade's
+// planning. When Expected is empty (predict failed, e.g. predictUnRC has
+// nothing to unRC), polling is skipped — the dispatch path or operator
+// edit is the recovery here.
+//
+// Returns true when at least one prompt was claimed.
+func (r *Reconciler) pollCascadeTags(ctx context.Context, op *cascade.Op, issueNum int) (bool, error) {
+	if op.CurrentStage >= len(op.Stages) {
+		return false, nil
+	}
+	stage := &op.Stages[op.CurrentStage]
+	if !allBumpsMerged(*stage) {
+		return false, nil
+	}
+	mutated := false
+	for j := range stage.Tags {
+		tg := &stage.Tags[j]
+		if tg.Tagged || tg.Expected == "" {
+			continue
+		}
+		tag, err := r.findReleasedTagAtOrAbove(ctx, tg.Repo, tg.Expected)
+		if err != nil {
+			log.Printf("passCascade: cascade #%d: poll tag %s %s: %v", issueNum, tg.Repo, tg.Branch, err)
+			continue
+		}
+		if tag == "" {
+			continue
+		}
+		log.Printf("passCascade: cascade #%d claimed %s %s tag %s from release poll (expected %s)", issueNum, tg.Repo, tg.Branch, tag, tg.Expected)
+		tg.Version = tag
+		tg.Tagged = true
+		mutated = true
+	}
+	return mutated, nil
+}
+
+// findReleasedTagAtOrAbove returns the highest published release tag in
+// `repoName` that is on the same minor as `expected` and orders semver
+// >= expected. Returns "" with no error when no such release exists yet.
+func (r *Reconciler) findReleasedTagAtOrAbove(ctx context.Context, repoName, expected string) (string, error) {
+	repoCfg, ok := r.cfg.Repos[repoName]
+	if !ok {
+		return "", fmt.Errorf("repo %q not in config", repoName)
+	}
+	ghRepo, err := repoCfg.GitHubRepo()
+	if err != nil {
+		return "", err
+	}
+	if !semver.IsValid(expected) {
+		return "", fmt.Errorf("expected %q is not valid semver", expected)
+	}
+	minor := semver.MajorMinor(expected)
+	tags, err := r.gh.ListReleaseTags(ctx, ghRepo)
+	if err != nil {
+		return "", err
+	}
+	var best string
+	for _, t := range tags {
+		if !semver.IsValid(t) || semver.MajorMinor(t) != minor {
+			continue
+		}
+		if semver.Compare(t, expected) < 0 {
+			continue
+		}
+		if best == "" || semver.Compare(t, best) > 0 {
+			best = t
+		}
+	}
+	return best, nil
 }
 
 // tryClaimCascadeTag offers a just-emitted tag to every open cascade. If any

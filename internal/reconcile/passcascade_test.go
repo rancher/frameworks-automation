@@ -184,6 +184,123 @@ func has(labels []string, want string) bool {
 	return false
 }
 
+// TestPollCascadeTags_ClaimsPrereleaseFromReleasePoll verifies the cron
+// safety net catches tags the dispatch path missed — specifically a
+// pre-release like webhook v0.11.0-rc.6 that GetLatestReleaseTag (used by
+// pass1Cron) filters out.
+func TestPollCascadeTags_ClaimsPrereleaseFromReleasePoll(t *testing.T) {
+	const webhookVersionMD = `Webhook follows ...
+
+| Webhook Branch | Webhook Minor version | Matching Rancher Version |
+|----------------|-----------------------|--------------------------|
+| main | v0.11 | v2.15 |
+| release/v0.10 | v0.10 | v2.14 |
+`
+	cfg := &config.Config{Repos: map[string]config.Repo{
+		"rancher": {Kind: config.KindLeaf, Repo: "x/rancher"},
+		"webhook": {Kind: config.KindPaired, Repo: "x/webhook", VersionMD: webhookVersionMD},
+	}}
+	gh := newFakeGH(map[string]*fakeRepoState{
+		"x/webhook": {Tags: []string{"v0.11.0-rc.6", "v0.11.0-rc.5", "v0.10.5"}},
+	})
+
+	op := cascade.Op{
+		LeafRepo:   "rancher",
+		LeafBranch: "main",
+		Stages: []cascade.Stage{
+			{
+				Layer: 1,
+				Bumps: []cascade.Bump{{Repo: "webhook", Branch: "main", State: "merged"}},
+				Tags:  []cascade.TagPrompt{{Repo: "webhook", Branch: "main", Expected: "v0.11.0-rc.6"}},
+			},
+		},
+	}
+	r := newWithDeps("test", cfg, Settings{AutomationRepo: "owner/auto", Tokens: map[string]string{"owner/auto": "x"}}, gh, newFakeBumper(gh))
+
+	mutated, err := r.pollCascadeTags(context.Background(), &op, 42)
+	if err != nil {
+		t.Fatalf("pollCascadeTags: %v", err)
+	}
+	if !mutated {
+		t.Fatal("expected pollCascadeTags to claim the released pre-release tag")
+	}
+	tg := op.Stages[0].Tags[0]
+	if !tg.Tagged || tg.Version != "v0.11.0-rc.6" {
+		t.Errorf("prompt not claimed correctly: got %+v want Tagged=true Version=v0.11.0-rc.6", tg)
+	}
+}
+
+// TestPollCascadeTags_SkipsWhenBumpsNotMerged ensures the same gate as
+// tryClaimCascadeTag: a tag emitted before the stage's bumps merge does
+// not retroactively claim the slot — that would short-circuit the
+// bump→tag ordering the cascade enforces.
+func TestPollCascadeTags_SkipsWhenBumpsNotMerged(t *testing.T) {
+	cfg := &config.Config{Repos: map[string]config.Repo{
+		"rancher": {Kind: config.KindLeaf, Repo: "x/rancher"},
+		"webhook": {Kind: config.KindPaired, Repo: "x/webhook"},
+	}}
+	gh := newFakeGH(map[string]*fakeRepoState{
+		"x/webhook": {Tags: []string{"v0.11.0-rc.6"}},
+	})
+
+	op := cascade.Op{
+		LeafRepo:   "rancher",
+		LeafBranch: "main",
+		Stages: []cascade.Stage{
+			{
+				Layer: 1,
+				Bumps: []cascade.Bump{{Repo: "webhook", Branch: "main", State: "open"}},
+				Tags:  []cascade.TagPrompt{{Repo: "webhook", Branch: "main", Expected: "v0.11.0-rc.6"}},
+			},
+		},
+	}
+	r := newWithDeps("test", cfg, Settings{AutomationRepo: "owner/auto", Tokens: map[string]string{"owner/auto": "x"}}, gh, newFakeBumper(gh))
+
+	mutated, err := r.pollCascadeTags(context.Background(), &op, 42)
+	if err != nil {
+		t.Fatalf("pollCascadeTags: %v", err)
+	}
+	if mutated {
+		t.Errorf("expected no claim while bumps still open, got %+v", op.Stages[0].Tags[0])
+	}
+}
+
+// TestPollCascadeTags_SkipsStalePriorCycleTag covers the
+// branch-already-bumped-past-an-rc case: cascade is waiting for v0.7.5-rc.2
+// (Expected hint set at creation), the only published release on this minor
+// is v0.7.5-rc.1 from a prior cycle. Polling must NOT claim rc.1 — the
+// cascade is waiting on a fresh tag that includes the merged bump.
+func TestPollCascadeTags_SkipsStalePriorCycleTag(t *testing.T) {
+	cfg := &config.Config{Repos: map[string]config.Repo{
+		"rancher": {Kind: config.KindLeaf, Repo: "x/rancher"},
+		"webhook": {Kind: config.KindPaired, Repo: "x/webhook"},
+	}}
+	gh := newFakeGH(map[string]*fakeRepoState{
+		"x/webhook": {Tags: []string{"v0.7.5-rc.1"}},
+	})
+
+	op := cascade.Op{
+		LeafRepo:   "rancher",
+		LeafBranch: "main",
+		Stages: []cascade.Stage{
+			{
+				Layer: 1,
+				Bumps: []cascade.Bump{{Repo: "webhook", Branch: "main", State: "merged"}},
+				Tags:  []cascade.TagPrompt{{Repo: "webhook", Branch: "main", Expected: "v0.7.5-rc.2"}},
+			},
+		},
+	}
+	r := newWithDeps("test", cfg, Settings{AutomationRepo: "owner/auto", Tokens: map[string]string{"owner/auto": "x"}}, gh, newFakeBumper(gh))
+
+	mutated, err := r.pollCascadeTags(context.Background(), &op, 42)
+	if err != nil {
+		t.Fatalf("pollCascadeTags: %v", err)
+	}
+	if mutated {
+		t.Errorf("expected no claim — only stale prior-cycle tag exists, got %+v", op.Stages[0].Tags[0])
+	}
+}
+
 func TestCascadeBumpBranchName(t *testing.T) {
 	cases := []struct {
 		name         string
