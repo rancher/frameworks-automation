@@ -14,7 +14,7 @@
 # Usage: bump-remotedialer-proxy.sh <new-version>
 #   e.g. bump-remotedialer-proxy.sh v0.7.1
 #
-# Required tools in PATH: yq (v4), make. The rancher Makefile pulls dapper.
+# Required tools in PATH: yq (v4), go (for `go generate`).
 set -euo pipefail
 
 if [[ $# -ne 1 ]]; then
@@ -68,11 +68,6 @@ fi
 
 yq --inplace ".remoteDialerProxyVersion = \"${NEW_CHART_VERSION}+up${NEW_SHORT}\"" ./build.yaml
 
-# Pull dapper, regenerate generated code. DAPPER_MODE=bind surfaces all
-# changes back into the working tree; the trailing rm cleans up dapper's
-# scratch dirs so they don't show up as diff.
-make .dapper
-DAPPER_MODE=bind ./.dapper go generate ./... || true
-DAPPER_MODE=bind ./.dapper rm -rf go .config
+go generate ./...
 
 echo "bump-remotedialer-proxy: bumped to ${NEW_CHART_VERSION}+up${NEW_SHORT}"

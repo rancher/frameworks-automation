@@ -2,6 +2,7 @@ package reconcile
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -24,18 +25,23 @@ import (
 //   - When all current-stage bumps merged AND no tag prompts (final stage),
 //     closes the cascade.
 //
-// One cascade's failure doesn't stop the others — log and continue.
+// One cascade's failure doesn't stop the others — collect and continue,
+// then return the joined errors so the workflow run goes red. Returning
+// nil on per-cascade failure would silently mask things like a strategy
+// script erroring on a downstream bump.
 func (r *Reconciler) passCascade(ctx context.Context) error {
 	cascades, err := r.gh.ListOpenIssues(ctx, r.settings.AutomationRepo, []string{cascade.LabelOp, cascade.ConfigLabel(r.configName)})
 	if err != nil {
 		return fmt.Errorf("list cascades: %w", err)
 	}
+	var errs []error
 	for _, c := range cascades {
 		if err := r.advanceCascade(ctx, c); err != nil {
 			log.Printf("passCascade: cascade #%d: %v", c.Number, err)
+			errs = append(errs, fmt.Errorf("cascade #%d: %w", c.Number, err))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 func (r *Reconciler) advanceCascade(ctx context.Context, issue *ghclient.Issue) error {
