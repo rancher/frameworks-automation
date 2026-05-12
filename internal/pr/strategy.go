@@ -130,5 +130,5 @@ func (s scriptStrategy) Apply(ctx context.Context, repoDir string, m Module) err
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("script strategy %q: close: %w", s.name, err)
 	}
-	return run(ctx, repoDir, nil, f.Name(), m.Version)
+	return run(ctx, repoDir, toolchainEnv(repoDir), f.Name(), m.Version)
 }
