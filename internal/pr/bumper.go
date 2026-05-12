@@ -267,7 +267,8 @@ func configureIdentity(ctx context.Context, dir string) error {
 }
 
 func runGoGet(ctx context.Context, dir, module, version string) error {
-	return run(ctx, dir, []string{"GOFLAGS=-mod=mod"}, "go", "get", module+"@"+version)
+	env := append(toolchainEnv(dir), "GOFLAGS=-mod=mod")
+	return run(ctx, dir, env, "go", "get", module+"@"+version)
 }
 
 func hasVendor(dir string) bool {
