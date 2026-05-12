@@ -47,18 +47,6 @@ jobs:
         with:
           go-version-file: 'go.mod'
 
-      - name: Install yq
-        # Required by the embedded bump-webhook.sh / chart-bump-webhook.sh
-        # strategy scripts. Skip if a yq is already on PATH (the GitHub
-        # ubuntu-latest image ships mikefarah/yq at /usr/bin/yq, which is
-        # what we want); only fall back to snap when nothing's installed.
-        run: |
-          if command -v yq >/dev/null 2>&1; then
-            echo "yq already installed: $(yq --version) at $(command -v yq)"
-            exit 0
-          fi
-          sudo snap install yq --channel=v4/stable
-
       - uses: ./.github/actions/mint-tokens
 
       - name: Run reconciler (cascade, unrc webhook)
