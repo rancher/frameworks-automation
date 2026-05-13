@@ -97,6 +97,63 @@ func (b *Bumper) Open(ctx context.Context, req Request) (*Result, error) {
 	if err := b.clone(ctx, req.Repo, req.BaseBranch, repoDir); err != nil {
 		return nil, err
 	}
+
+	if result, err := b.applyBundle(ctx, repoDir, req); err != nil {
+		return nil, err
+	} else if result != nil {
+		return result, nil
+	}
+
+	pushRemote := "origin"
+	prHead := req.HeadBranch
+	if req.Fork != "" {
+		forkToken, ok := b.tokens[req.Fork]
+		if !ok || forkToken == "" {
+			return nil, fmt.Errorf("no token configured for fork %s", req.Fork)
+		}
+		forkURL := fmt.Sprintf("https://x-access-token:%s@github.com/%s.git", forkToken, req.Fork)
+		if err := run(ctx, repoDir, nil, "git", "remote", "add", "fork", forkURL); err != nil {
+			return nil, b.scrubAllTokens(err)
+		}
+		pushRemote = "fork"
+		forkOwner := strings.SplitN(req.Fork, "/", 2)[0]
+		prHead = forkOwner + ":" + req.HeadBranch
+	}
+	if err := run(ctx, repoDir, nil, "git", "push", "-u", pushRemote, req.HeadBranch); err != nil {
+		return nil, b.scrubAllTokens(err)
+	}
+
+	pr, err := b.gh.CreatePR(ctx, req.Repo,
+		commitTitle(req.Modules),
+		buildPRBody(req),
+		prHead,
+		req.BaseBranch,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create PR %s %s -> %s: %w", req.Repo, req.HeadBranch, req.BaseBranch, err)
+	}
+	if len(req.Assignees) > 0 {
+		if err := b.gh.AddPRAssignees(ctx, req.Repo, pr.Number, req.Assignees); err != nil {
+			return nil, fmt.Errorf("assign PR %s#%d: %w", req.Repo, pr.Number, err)
+		}
+	}
+	return &Result{PR: pr, Notes: fmt.Sprintf("opened PR #%d", pr.Number)}, nil
+}
+
+// applyBundle is the local-only middle of Open: configure git identity,
+// branch off, run every strategy in req.Modules, run the post-bundle
+// tidy/vendor pass, and commit if anything changed. Pure working-tree
+// mutation — no network, no GitHub API.
+//
+// Carved out so integration tests can replay the exact pipeline against
+// a pre-cloned tree without triggering Open's push + CreatePR (which
+// would push test branches to the real downstream and open real PRs).
+//
+// Return shape:
+//   - (nil, err)            → strategy or git step failed
+//   - (NoOp result, nil)    → nothing changed; caller should skip push
+//   - (nil, nil)            → committed; caller should proceed with push + PR
+func (b *Bumper) applyBundle(ctx context.Context, repoDir string, req Request) (*Result, error) {
 	if err := configureIdentity(ctx, repoDir); err != nil {
 		return nil, err
 	}
@@ -153,45 +210,10 @@ func (b *Bumper) Open(ctx context.Context, req Request) (*Result, error) {
 	if err := run(ctx, repoDir, nil, "git", "add", "-A"); err != nil {
 		return nil, err
 	}
-	title := commitTitle(req.Modules)
 	if err := run(ctx, repoDir, nil, "git", "commit", "-m", commitMessage(req.Modules)); err != nil {
 		return nil, err
 	}
-
-	pushRemote := "origin"
-	prHead := req.HeadBranch
-	if req.Fork != "" {
-		forkToken, ok := b.tokens[req.Fork]
-		if !ok || forkToken == "" {
-			return nil, fmt.Errorf("no token configured for fork %s", req.Fork)
-		}
-		forkURL := fmt.Sprintf("https://x-access-token:%s@github.com/%s.git", forkToken, req.Fork)
-		if err := run(ctx, repoDir, nil, "git", "remote", "add", "fork", forkURL); err != nil {
-			return nil, b.scrubAllTokens(err)
-		}
-		pushRemote = "fork"
-		forkOwner := strings.SplitN(req.Fork, "/", 2)[0]
-		prHead = forkOwner + ":" + req.HeadBranch
-	}
-	if err := run(ctx, repoDir, nil, "git", "push", "-u", pushRemote, req.HeadBranch); err != nil {
-		return nil, b.scrubAllTokens(err)
-	}
-
-	pr, err := b.gh.CreatePR(ctx, req.Repo,
-		title,
-		buildPRBody(req),
-		prHead,
-		req.BaseBranch,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("create PR %s %s -> %s: %w", req.Repo, req.HeadBranch, req.BaseBranch, err)
-	}
-	if len(req.Assignees) > 0 {
-		if err := b.gh.AddPRAssignees(ctx, req.Repo, pr.Number, req.Assignees); err != nil {
-			return nil, fmt.Errorf("assign PR %s#%d: %w", req.Repo, pr.Number, err)
-		}
-	}
-	return &Result{PR: pr, Notes: fmt.Sprintf("opened PR #%d", pr.Number)}, nil
+	return nil, nil
 }
 
 func (b *Bumper) findExistingPR(ctx context.Context, req Request) (*ghclient.PR, error) {
@@ -268,7 +290,17 @@ func configureIdentity(ctx context.Context, dir string) error {
 
 func runGoGet(ctx context.Context, dir, module, version string) error {
 	env := append(toolchainEnv(dir), "GOFLAGS=-mod=mod")
-	return run(ctx, dir, env, "go", "get", module+"@"+version)
+	if err := run(ctx, dir, env, "go", "get", module+"@"+version); err != nil {
+		return err
+	}
+	// Tidy after every go-get so each one leaves go.mod/go.sum
+	// internally consistent. Without this, a follow-up strategy that
+	// reads go.sum (e.g. a script that runs `go generate`) trips on
+	// missing transitive entries `go get` doesn't necessarily add —
+	// the post-bundle tidy at the end of Bumper.Open is too late for
+	// that case. Keep -mod=mod for the same vendored-downstream reason
+	// as the get above.
+	return run(ctx, dir, env, "go", "mod", "tidy")
 }
 
 func hasVendor(dir string) bool {
