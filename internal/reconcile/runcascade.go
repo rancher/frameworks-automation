@@ -206,6 +206,14 @@ func (r *Reconciler) openCascadeStageBumps(ctx context.Context, op *cascade.Op, 
 	if stage < 0 || stage >= len(op.Stages) {
 		return false, nil
 	}
+	chartBranch := ""
+	if stageNeedsChartBranch(op.Stages[stage]) {
+		var err error
+		chartBranch, err = r.chartBranchForLeaf(ctx, op.LeafBranch)
+		if err != nil {
+			return false, fmt.Errorf("resolve CHART_BRANCH for cascade stage %d: %w", stage, err)
+		}
+	}
 	mutated := false
 	for i := range op.Stages[stage].Bumps {
 		bp := &op.Stages[stage].Bumps[i]
@@ -225,7 +233,7 @@ func (r *Reconciler) openCascadeStageBumps(ctx context.Context, op *cascade.Op, 
 			Fork:       downstream.Fork,
 			BaseBranch: bp.Branch,
 			HeadBranch: cascadeBumpBranchName(issueNum, bp.Repo, bp.Branch),
-			Modules:    bumpModules(bp),
+			Modules:    bumpModules(bp, chartBranch),
 			TrackerURL: trackerURL,
 			Assignees:  actorAssignees(op.TriggeredBy),
 		}
@@ -394,12 +402,30 @@ func bumpReady(bp *cascade.Bump) bool {
 	return true
 }
 
-func bumpModules(bp *cascade.Bump) []pr.Module {
+func bumpModules(bp *cascade.Bump, chartBranch string) []pr.Module {
 	out := make([]pr.Module, len(bp.Deps))
 	for i, d := range bp.Deps {
-		out[i] = pr.Module{Path: d.Module, Version: d.Version, Strategy: d.Strategy}
+		m := pr.Module{Path: d.Module, Version: d.Version, Strategy: d.Strategy}
+		if strategyUsesChartBranch(d.Strategy) {
+			m.ChartBranch = chartBranch
+		}
+		out[i] = m
 	}
 	return out
+}
+
+// stageNeedsChartBranch reports whether any bump in `stage` uses a strategy
+// that needs CHART_BRANCH. Used to skip the resolver call when no module in
+// the stage will consume it.
+func stageNeedsChartBranch(stage cascade.Stage) bool {
+	for _, bp := range stage.Bumps {
+		for _, d := range bp.Deps {
+			if strategyUsesChartBranch(d.Strategy) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // assertReleaseExists confirms `version` is a published release tag on
