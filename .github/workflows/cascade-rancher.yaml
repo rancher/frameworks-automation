@@ -12,7 +12,7 @@ name: Cascade (rancher)
 # Inputs:
 #   - rancher_branch: required. The leaf branch the cascade lands on.
 #   - One optional version input per known independent in this config
-#     (currently: wrangler).
+#     (currently: dynamiclistener, remotedialer, wrangler).
 #
 # When new independents are added to dependencies/rancher.yaml, add a
 # matching input here and a matching shell branch below.
@@ -24,6 +24,16 @@ on:
         description: 'leaf rancher branch the cascade lands on (e.g. main, release/v2.13)'
         required: true
         type: string
+      dynamiclistener:
+        description: 'optional: dynamiclistener version (e.g. v0.7.0). Leave empty to skip an explicit dynamiclistener bump.'
+        required: false
+        type: string
+        default: ''
+      remotedialer:
+        description: 'optional: remotedialer version (e.g. v0.4.1). Leave empty to skip an explicit remotedialer bump.'
+        required: false
+        type: string
+        default: ''
       wrangler:
         description: 'optional: wrangler version (e.g. v0.5.2). Leave empty to skip an explicit wrangler bump.'
         required: false
@@ -65,6 +75,8 @@ jobs:
           AUTOMATION_REPO: ${{ github.repository }}
           GITHUB_TOKEN: ${{ github.token }}
           RANCHER_BRANCH: ${{ inputs.rancher_branch }}
+          DYNAMICLISTENER: ${{ inputs.dynamiclistener }}
+          REMOTEDIALER: ${{ inputs.remotedialer }}
           WRANGLER: ${{ inputs.wrangler }}
           GITHUB_ACTOR: ${{ github.actor }}
         run: |
@@ -78,6 +90,8 @@ jobs:
               fi
             fi
           }
+          append dynamiclistener "$DYNAMICLISTENER"
+          append remotedialer "$REMOTEDIALER"
           append wrangler "$WRANGLER"
           go run ./cmd/reconciler \
             -mode=cascade \

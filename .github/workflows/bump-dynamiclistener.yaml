@@ -1,24 +1,24 @@
-name: Bump wrangler
+name: Bump dynamiclistener
 
-# Manual entrypoint for landing a wrangler version across every repo that
-# ships against a chosen rancher branch.
+# Manual entrypoint for landing a dynamiclistener version across every repo
+# that ships against a chosen rancher branch.
 #
-# wrangler is `kind: independent` in dependencies.yaml — pass 1 only auto-PRs
-# `main` on every dependent. Older `release/*` lines must be bumped on
-# request: open this workflow in the Actions tab, fill in the wrangler
-# version and the rancher branch, hit Run. The reconciler resolves the
-# downstream set itself (rancher direct, paired components via VERSION.md
-# Pair-column lookup) and opens a bump PR per resolved (repo, branch).
+# dynamiclistener is `kind: independent` in dependencies.yaml — pass 1 only
+# auto-PRs `main` on every dependent. Older `release/*` lines must be bumped
+# on request: open this workflow in the Actions tab, fill in the
+# dynamiclistener version and the rancher branch, hit Run. The reconciler
+# resolves the downstream set itself (rancher direct, paired components via
+# VERSION.md Pair-column lookup) and opens a bump PR per resolved
+# (repo, branch).
 #
 # `dep` is intentionally NOT an input — one workflow per dep keeps the UI
-# obvious ("Bump wrangler") and the dispatch surface narrow. One bump-<dep>.yaml
-# per independent dep; copy this file when adding a new one.
+# obvious ("Bump dynamiclistener") and the dispatch surface narrow.
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'wrangler version (e.g. v0.5.1)'
+        description: 'dynamiclistener version (e.g. v0.7.0)'
         required: true
         type: string
       rancher_branch:
@@ -64,6 +64,6 @@ jobs:
         run: |
           go run ./cmd/reconciler \
             -mode=bump-dep \
-            -dep=wrangler \
+            -dep=dynamiclistener \
             -version="$VERSION" \
             -leaf-branch="$RANCHER_BRANCH"

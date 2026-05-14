@@ -65,7 +65,9 @@ repos:
       | release/v2.10  | v2.10         |
     deps:
       - {name: apiserver}
+      - {name: dynamiclistener}
       - {name: norman}
+      - {name: remotedialer}
       - {name: steve}
       - {name: webhook, strategy: bump-webhook}
       - {name: remotedialer-proxy, strategy: bump-remotedialer-proxy}
@@ -85,6 +87,8 @@ repos:
     token-env: GH_TOKEN_REMOTEDIALER_PROXY
     next-tag-strategy: rc
     deps:
+      - {name: dynamiclistener}
+      - {name: remotedialer}
       - {name: wrangler}
   webhook:
     kind: paired
@@ -92,6 +96,7 @@ repos:
     token-env: GH_TOKEN_WEBHOOK
     next-tag-strategy: rc
     deps:
+      - {name: dynamiclistener}
       - {name: norman}
       - {name: wrangler}
   steve:
@@ -101,6 +106,7 @@ repos:
     deps:
       - {name: apiserver}
       - {name: norman}
+      - {name: remotedialer}
       - {name: wrangler}
   apiserver:
     kind: paired
@@ -118,4 +124,15 @@ repos:
     kind: independent
     repo: rancher/wrangler
     token-env: GH_TOKEN_WRANGLER
+    deps: []
+  dynamiclistener:
+    kind: independent
+    repo: rancher/dynamiclistener
+    token-env: GH_TOKEN_DYNAMICLISTENER
+    deps:
+      - {name: wrangler}
+  remotedialer:
+    kind: independent
+    repo: rancher/remotedialer
+    token-env: GH_TOKEN_REMOTEDIALER
     deps: []
