@@ -26,6 +26,19 @@
 # carries the "v" prefix, e.g. "v2.16"). For "dev-v2.16" branches, write
 # `dev-{rancher-minor}` — not `dev-v{rancher-minor}`.
 #
+# post-bundle: ordered list of hooks to run after the bundle's strategies and
+# tidy pass have settled the working tree, before the commit. Each hook is
+# idempotent. Registered hooks:
+#   sync-deps                       - aligns every dep declared in this repo's
+#                                     `deps` list to the version in the root
+#                                     go.mod, propagating it into every other
+#                                     go.mod under the repo that already
+#                                     references the dep. Required for
+#                                     rancher/rancher whose pkg/client and
+#                                     pkg/apis go.mod files must agree with
+#                                     the root on shared rancher-family dep
+#                                     versions.
+#
 # deps: upstream repos this repo depends on. Each entry is `{name, strategy}`
 # where strategy defaults to `go-get` if omitted. Strategies:
 #   go-get                          - default; runs `go get module@version`.
@@ -54,6 +67,8 @@ repos:
     kind: leaf
     repo: rancher/rancher
     token-env: GH_TOKEN_RANCHER
+    post-bundle:
+      - sync-deps
     version-md: |
       | Rancher Branch | Rancher Minor |
       |----------------|---------------|

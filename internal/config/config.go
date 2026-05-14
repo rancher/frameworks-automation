@@ -64,6 +64,21 @@ const (
 	StrategyOrder                      Strategy = "order"
 )
 
+// PostBundleHook names a procedure run on the working tree after every bump
+// bundle's strategies + tidy pass complete and before the commit. Each value
+// maps to a registered implementation in internal/pr; the bumper dispatches
+// in list order.
+type PostBundleHook string
+
+const (
+	// PostBundleSyncDeps aligns every dep declared in this repo's `deps` list
+	// to the version present in the root go.mod, propagating that version
+	// into every other go.mod under the repo that already references it.
+	// Required for rancher/rancher whose pkg/client and pkg/apis go.mod files
+	// must agree with the root on shared rancher-family dep versions.
+	PostBundleSyncDeps PostBundleHook = "sync-deps"
+)
+
 // Dep is one entry in a Repo's deps list. Object form only — name is required;
 // strategy defaults to go-get when omitted.
 type Dep struct {
@@ -100,7 +115,11 @@ type Repo struct {
 	// tag at cascade-mid prompts. Defaults to NextTagPatch (patch+1). Set
 	// to NextTagRC for repos whose release cadence bumps the rc.N suffix.
 	NextTagStrategy NextTagStrategy `yaml:"next-tag-strategy,omitempty"`
-	Deps            []Dep           `yaml:"deps"`
+	// PostBundle lists hooks to run after the bundle's strategies + tidy pass
+	// have settled the working tree, before the commit. Hooks run in list
+	// order. See internal/pr for the registered set.
+	PostBundle []PostBundleHook `yaml:"post-bundle,omitempty"`
+	Deps       []Dep            `yaml:"deps"`
 }
 
 // GitHubRepo returns the GitHub owner/name for this repo.
@@ -239,6 +258,16 @@ func (c *Config) validate() error {
 		if !knownNextTagStrategy(r.NextTagStrategy) {
 			return fmt.Errorf("repo %q: unknown next-tag-strategy %q", name, r.NextTagStrategy)
 		}
+		seenHook := make(map[PostBundleHook]bool, len(r.PostBundle))
+		for _, h := range r.PostBundle {
+			if !knownPostBundleHook(h) {
+				return fmt.Errorf("repo %q: unknown post-bundle hook %q", name, h)
+			}
+			if seenHook[h] {
+				return fmt.Errorf("repo %q: post-bundle hook %q listed twice", name, h)
+			}
+			seenHook[h] = true
+		}
 		seen := make(map[string]bool, len(r.Deps))
 		for i, d := range r.Deps {
 			if d.Name == "" {
@@ -262,6 +291,14 @@ func (c *Config) validate() error {
 func knownNextTagStrategy(s NextTagStrategy) bool {
 	switch s {
 	case NextTagPatch, NextTagRC, NextTagUnRC:
+		return true
+	}
+	return false
+}
+
+func knownPostBundleHook(h PostBundleHook) bool {
+	switch h {
+	case PostBundleSyncDeps:
 		return true
 	}
 	return false
@@ -385,6 +422,27 @@ func (c *Config) FirstModulePath(repoName string) string {
 		return paths[0]
 	}
 	return ""
+}
+
+// SyncModulesFor returns the module paths whose versions should be aligned
+// across every go.mod in repoName, sourced from the deps list. Empty when
+// repoName is unknown or has no deps that publish modules. Used by the
+// sync-deps post-bundle hook; safe to call regardless of whether that hook
+// is enabled (the hook ignores empty input).
+//
+// Requires DiscoverModules to have run; otherwise c.Modules is empty and the
+// returned slice will be empty too.
+func (c *Config) SyncModulesFor(repoName string) []string {
+	r, ok := c.Repos[repoName]
+	if !ok {
+		return nil
+	}
+	var out []string
+	for _, d := range r.Deps {
+		out = append(out, c.Modules[d.Name]...)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // ModuleToRepo builds a reverse index from Go module path → config key,
