@@ -113,6 +113,79 @@ func TestIntegration_BumpCascade19Stage3(t *testing.T) {
 	}
 }
 
+// TestIntegration_BumpRancherSyncDeps replays the single-dep bump that
+// surfaced the cross-go.mod drift this hook exists to fix
+// (frameworks-automation #38: bumping steve to v0.7.46 against rancher
+// 2782f51671cae849ae06c9c38f7028a762a6ad32). At that SHA root and
+// pkg/apis/go.mod both pin norman v0.7.2; steve@v0.7.46 transitively
+// requires norman v0.7.3, so the post-bundle tidy advances root to
+// v0.7.3 while pkg/apis stays at v0.7.2. Rancher's own
+// .github/scripts/check-for-go-mod-changes.sh then rejects the tree
+// with "Diff found between ./go.mod and ./pkg/apis/go.mod".
+//
+// Same applyBundle path as the cascade-19 test (no push, no CreatePR)
+// but with PostBundle and SyncModules populated as the reconciler would
+// in production via downstream.PostBundle + Config.SyncModulesFor.
+//
+// Verified on this SHA: with PostBundle set to nil the validator fails
+// with "github.com/rancher/norman is different ('v0.7.2' vs 'v0.7.3')";
+// with the sync-deps hook enabled it passes because pkg/apis is fanned
+// out to root's resolved norman version.
+func TestIntegration_BumpRancherSyncDeps(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go not on PATH")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+
+	const (
+		repoURL   = "https://github.com/rancher/rancher.git"
+		pinnedSHA = "2782f51671cae849ae06c9c38f7028a762a6ad32"
+	)
+
+	ctx := context.Background()
+	repoDir := filepath.Join(t.TempDir(), "repo")
+	checkoutAtSHA(t, ctx, repoDir, repoURL, pinnedSHA)
+
+	b := NewBumper(nil, nil)
+	req := Request{
+		Repo:       "rancher/rancher",
+		BaseBranch: "main",
+		HeadBranch: "test-rancher-sync-deps",
+		Modules: []Module{
+			{Path: "github.com/rancher/steve", Version: "v0.7.46", Strategy: config.StrategyGoGet},
+		},
+		PostBundle: []config.PostBundleHook{config.PostBundleSyncDeps},
+		// Mirrors what config.SyncModulesFor("rancher") produces in
+		// production: every module path published by every dep in rancher's
+		// deps list. Modules absent from a sub-module's go.mod are skipped
+		// by the hook, so listing the full set is harmless.
+		SyncModules: []string{
+			"github.com/rancher/apiserver",
+			"github.com/rancher/norman",
+			"github.com/rancher/remotedialer-proxy",
+			"github.com/rancher/steve",
+			"github.com/rancher/webhook",
+			"github.com/rancher/wrangler/v3",
+		},
+	}
+	result, err := b.applyBundle(ctx, repoDir, req)
+	if err != nil {
+		t.Fatalf("applyBundle: %v", err)
+	}
+	if result != nil && result.NoOp {
+		t.Fatalf("applyBundle returned NoOp — expected a real diff against the pinned commit, got: %s", result.Notes)
+	}
+
+	// check-for-go-mod-changes.sh both re-tidies/verifies each go.mod and
+	// asserts the rancher-family deps in pkg/apis/go.mod match the versions
+	// in root go.mod. Without sync-deps this fails with "Diff found between
+	// ./go.mod and ./pkg/apis/go.mod" on wrangler/v3 — confirmed by toggling
+	// PostBundle to nil locally on this SHA.
+	runOrFail(t, ctx, repoDir, toolchainEnv(repoDir), ".github/scripts/check-for-go-mod-changes.sh")
+}
+
 // runOrFail executes name+args in dir, streams stdio, and t.Fatalf's on
 // non-zero exit. extraEnv is appended to os.Environ() when non-nil.
 func runOrFail(t *testing.T, ctx context.Context, dir string, extraEnv []string, name string, args ...string) {

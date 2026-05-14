@@ -496,6 +496,89 @@ repos:
 	}
 }
 
+func TestLoad_PostBundleHook(t *testing.T) {
+	path := writeYAML(t, `
+repos:
+  rancher:
+    kind: leaf
+    repo: x/rancher
+    post-bundle:
+      - sync-deps
+    deps:
+      - {name: wrangler}
+  wrangler:
+    kind: independent
+    repo: x/wrangler
+    deps: []
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	got := cfg.Repos["rancher"].PostBundle
+	if len(got) != 1 || got[0] != PostBundleSyncDeps {
+		t.Errorf("post-bundle: got %v want [sync-deps]", got)
+	}
+}
+
+func TestLoad_RejectsUnknownPostBundleHook(t *testing.T) {
+	path := writeYAML(t, `
+repos:
+  rancher:
+    kind: leaf
+    repo: x/rancher
+    post-bundle:
+      - not-a-hook
+    deps: []
+`)
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "unknown post-bundle hook") {
+		t.Errorf("want 'unknown post-bundle hook' error, got %v", err)
+	}
+}
+
+func TestLoad_RejectsDuplicatePostBundleHook(t *testing.T) {
+	path := writeYAML(t, `
+repos:
+  rancher:
+    kind: leaf
+    repo: x/rancher
+    post-bundle:
+      - sync-deps
+      - sync-deps
+    deps: []
+`)
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "listed twice") {
+		t.Errorf("want 'listed twice' error, got %v", err)
+	}
+}
+
+func TestSyncModulesFor(t *testing.T) {
+	cfg := &Config{
+		Repos: map[string]Repo{
+			"rancher": {Deps: []Dep{{Name: "steve"}, {Name: "wrangler"}, {Name: "chart", Strategy: StrategyOrder}}},
+			"steve":   {},
+		},
+		Modules: map[string][]string{
+			"steve":    {"github.com/rancher/steve"},
+			"wrangler": {"github.com/rancher/wrangler"},
+			// chart publishes no Go module; the order-only edge contributes nothing.
+		},
+	}
+	got := cfg.SyncModulesFor("rancher")
+	want := []string{"github.com/rancher/steve", "github.com/rancher/wrangler"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("[%d]: got %q want %q", i, got[i], want[i])
+		}
+	}
+	if cfg.SyncModulesFor("unknown") != nil {
+		t.Error("unknown repo should return nil")
+	}
+}
+
 func TestFirstModulePath(t *testing.T) {
 	cfg := &Config{
 		Repos: map[string]Repo{

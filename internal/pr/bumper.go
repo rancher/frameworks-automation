@@ -49,6 +49,14 @@ type Request struct {
 	TrackerURL string
 	// Assignees lists GitHub logins to assign to the opened PR.
 	Assignees []string
+	// PostBundle is the ordered list of post-bundle hooks to run after the
+	// strategies and tidy pass complete and before the commit. Sourced from
+	// downstream-repo config.
+	PostBundle []config.PostBundleHook
+	// SyncModules is input for the sync-deps post-bundle hook: module paths
+	// to align across every go.mod in the repo. Ignored when sync-deps isn't
+	// in PostBundle.
+	SyncModules []string
 }
 
 // Module is one (Go module path, target version) pair within a Request.
@@ -195,6 +203,16 @@ func (b *Bumper) applyBundle(ctx context.Context, repoDir string, req Request) (
 					return nil, err
 				}
 			}
+		}
+	}
+
+	for _, name := range req.PostBundle {
+		h, err := lookupPostBundleHook(name)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", req.Repo, err)
+		}
+		if err := h.Apply(ctx, repoDir, req); err != nil {
+			return nil, fmt.Errorf("%s post-bundle %s: %w", req.Repo, name, err)
 		}
 	}
 

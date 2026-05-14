@@ -128,12 +128,14 @@ func (r *Reconciler) bumpTarget(ctx context.Context, dep, version, leafBranch, d
 		return false, fmt.Errorf("downstream %s: %w", target.Repo, err)
 	}
 	req := pr.Request{
-		Repo:       downstreamGH,
-		Fork:       downstream.Fork,
-		BaseBranch: target.Branch,
-		HeadBranch: bumpBranchName(r.configName, dep, version, leafBranch),
-		Modules:    []pr.Module{{Path: depModule, Version: version, Strategy: downstream.DepStrategy(dep)}},
-		TrackerURL: trackerURL,
+		Repo:        downstreamGH,
+		Fork:        downstream.Fork,
+		BaseBranch:  target.Branch,
+		HeadBranch:  bumpBranchName(r.configName, dep, version, leafBranch),
+		Modules:     []pr.Module{{Path: depModule, Version: version, Strategy: downstream.DepStrategy(dep)}},
+		TrackerURL:  trackerURL,
+		PostBundle:  downstream.PostBundle,
+		SyncModules: r.cfg.SyncModulesFor(target.Repo),
 	}
 	log.Printf("bump: opening %s@%s -> %s base=%s head=%s", depModule, version, req.Repo, req.BaseBranch, req.HeadBranch)
 	res, err := r.bumper.Open(ctx, req)

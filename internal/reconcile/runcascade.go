@@ -221,13 +221,15 @@ func (r *Reconciler) openCascadeStageBumps(ctx context.Context, op *cascade.Op, 
 			return mutated, fmt.Errorf("cascade downstream %s: %w", bp.Repo, err)
 		}
 		req := pr.Request{
-			Repo:       downstreamGH,
-			Fork:       downstream.Fork,
-			BaseBranch: bp.Branch,
-			HeadBranch: cascadeBumpBranchName(issueNum, bp.Repo, bp.Branch),
-			Modules:    bumpModules(bp),
-			TrackerURL: trackerURL,
-			Assignees:  actorAssignees(op.TriggeredBy),
+			Repo:        downstreamGH,
+			Fork:        downstream.Fork,
+			BaseBranch:  bp.Branch,
+			HeadBranch:  cascadeBumpBranchName(issueNum, bp.Repo, bp.Branch),
+			Modules:     bumpModules(bp),
+			TrackerURL:  trackerURL,
+			Assignees:   actorAssignees(op.TriggeredBy),
+			PostBundle:  downstream.PostBundle,
+			SyncModules: r.cfg.SyncModulesFor(bp.Repo),
 		}
 		log.Printf("cascade: opening stage %d %s %s -> %s base=%s head=%s",
 			op.Stages[stage].Layer, bp.Repo, bp.Branch, req.Repo, req.BaseBranch, req.HeadBranch)
