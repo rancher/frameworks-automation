@@ -13,8 +13,10 @@
 #                 per-repo `Bump dep` workflow for older-branch bumps.
 #
 # repo: the GitHub owner/name (e.g. "rancher/wrangler"). Used for all
-# clone/PR/API operations. Go module paths are discovered at runtime from
-# each repo's go.mod files — no need to declare them here.
+# clone/PR/API operations. The Go module path is discovered at runtime from
+# each repo's root go.mod — no need to declare it here. Nested go.mods
+# (examples/, gotools/, etc.) are intentionally skipped; if a real
+# publishable submodule ever needs to be tracked, that's a code change.
 #
 # fork: optional. When set, bump branches are pushed to this fork and PRs
 # are opened as cross-repo PRs (head = "<fork-owner>:<branch>", base on

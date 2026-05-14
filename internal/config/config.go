@@ -377,10 +377,11 @@ func (c *Config) ResolveDep(ghRepo string) (string, error) {
 	return "", fmt.Errorf("repo %q not in dependencies.yaml", ghRepo)
 }
 
-// FirstModulePath returns the first Go module path known for the repo with
-// the given config key. Returns "" when no modules have been discovered yet
-// or the repo publishes no Go modules.
-func (c *Config) FirstModulePath(repoName string) string {
+// RootModulePath returns the canonical (root go.mod) Go module path for the
+// repo with the given config key. Returns "" when no modules have been
+// discovered yet or the repo publishes no Go modules. DiscoverModules only
+// records the root go.mod, so the underlying slice holds at most one entry.
+func (c *Config) RootModulePath(repoName string) string {
 	if paths := c.Modules[repoName]; len(paths) > 0 {
 		return paths[0]
 	}

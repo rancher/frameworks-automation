@@ -11,12 +11,18 @@ import (
 )
 
 // DiscoverModules walks each repo's default branch via the GitHub Trees API,
-// finds every go.mod outside vendor/, parses the module directive, and
-// populates c.Modules. Call after config.Load and after the GitHub client
-// is built.
+// fetches the **root** go.mod (path == "go.mod"), parses the module directive,
+// and populates c.Modules. Nested go.mods (examples/, gotools/, etc.) are
+// intentionally skipped — they aren't importable cross-repo deps and pulling
+// them in led to RootModulePath returning a non-canonical path like
+// "dummy/fakek8s" when the Trees API listed examples/fakek8s/go.mod first.
+// If a real publishable submodule ever needs to be tracked, declare it
+// explicitly in dependencies/<config>.yaml rather than re-broadening this
+// scan.
 //
-// Per-repo failures are logged and skipped — they degrade downstream detection
-// for that repo but do not abort the reconciler.
+// Call after config.Load and after the GitHub client is built. Per-repo
+// failures are logged and skipped — they degrade downstream detection for
+// that repo but do not abort the reconciler.
 func (c *Config) DiscoverModules(ctx context.Context, gh *ghclient.Client) error {
 	c.Modules = make(map[string][]string)
 	total := 0
@@ -35,6 +41,9 @@ func (c *Config) DiscoverModules(ctx context.Context, gh *ghclient.Client) error
 			continue
 		}
 		for _, p := range paths {
+			if p != "go.mod" {
+				continue
+			}
 			content, err := gh.FetchFile(ctx, ghRepo, "", p)
 			if err != nil {
 				log.Printf("discover modules: %s: fetch %s: %v", name, p, err)

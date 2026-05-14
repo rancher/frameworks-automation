@@ -496,7 +496,7 @@ repos:
 	}
 }
 
-func TestFirstModulePath(t *testing.T) {
+func TestRootModulePath(t *testing.T) {
 	cfg := &Config{
 		Repos: map[string]Repo{
 			"wrangler": {Repo: "rancher/wrangler"},
@@ -505,10 +505,10 @@ func TestFirstModulePath(t *testing.T) {
 			"wrangler": {"github.com/rancher/wrangler"},
 		},
 	}
-	if got := cfg.FirstModulePath("wrangler"); got != "github.com/rancher/wrangler" {
+	if got := cfg.RootModulePath("wrangler"); got != "github.com/rancher/wrangler" {
 		t.Errorf("got %q", got)
 	}
-	if got := cfg.FirstModulePath("unknown"); got != "" {
+	if got := cfg.RootModulePath("unknown"); got != "" {
 		t.Errorf("unknown repo should return empty string, got %q", got)
 	}
 }
