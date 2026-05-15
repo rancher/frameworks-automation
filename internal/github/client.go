@@ -7,12 +7,24 @@ package github
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
 	gh "github.com/google/go-github/v66/github"
 	"golang.org/x/oauth2"
 )
+
+// IsNotFound reports whether err is (or wraps) a GitHub 404 response. Useful
+// for callers that treat a missing file/repo as an expected zero value rather
+// than a hard failure (e.g. DiscoverModules tolerating non-Go repos).
+func IsNotFound(err error) bool {
+	var gerr *gh.ErrorResponse
+	if !errors.As(err, &gerr) {
+		return false
+	}
+	return gerr.Response != nil && gerr.Response.StatusCode == 404
+}
 
 // Client multiplexes per-repo go-github clients. Each call routes to the
 // client backed by the token configured for that repo's owner/name; an
@@ -354,36 +366,6 @@ func (c *Client) ClosePR(ctx context.Context, repo string, number int, comment s
 		return fmt.Errorf("close PR %s#%d: %w", repo, number, err)
 	}
 	return nil
-}
-
-// GetGoModPaths returns every go.mod path in repo's default branch tree,
-// excluding files under any vendor/ directory. Used by config.DiscoverModules
-// to populate the module-path index without a local clone.
-func (c *Client) GetGoModPaths(ctx context.Context, repo string) ([]string, error) {
-	owner, name, err := splitRepo(repo)
-	if err != nil {
-		return nil, err
-	}
-	tree, _, err := c.clientFor(repo).Git.GetTree(ctx, owner, name, "HEAD", true)
-	if err != nil {
-		return nil, fmt.Errorf("get tree %s: %w", repo, err)
-	}
-	var out []string
-	for _, e := range tree.Entries {
-		path := e.GetPath()
-		if e.GetType() != "blob" {
-			continue
-		}
-		if path != "go.mod" && !strings.HasSuffix(path, "/go.mod") {
-			continue
-		}
-		// Skip vendor directories.
-		if strings.Contains(path, "/vendor/") || strings.HasPrefix(path, "vendor/") {
-			continue
-		}
-		out = append(out, path)
-	}
-	return out, nil
 }
 
 // --- helpers ----------------------------------------------------------------
