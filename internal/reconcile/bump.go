@@ -89,7 +89,7 @@ func (r *Reconciler) runBump(ctx context.Context, dep, version, leafBranch strin
 		return fmt.Errorf("supersede older trackers for %s on %s %s: %w", dep, leafRepo, leafBranch, err)
 	}
 
-	depModule := r.cfg.FirstModulePath(dep)
+	depModule := r.cfg.RootModulePath(dep)
 
 	mutated := false
 	for i := range op.Targets {

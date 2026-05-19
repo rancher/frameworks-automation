@@ -20,9 +20,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/rancher/release-automation/internal/config"
+	ghclient "github.com/rancher/release-automation/internal/github"
 )
 
 // TestIntegration_BumpCascade19Stage3 replays the exact bundle that
@@ -111,6 +114,101 @@ func TestIntegration_BumpCascade19Stage3(t *testing.T) {
 	} {
 		runOrFail(t, ctx, repoDir, toolchainEnv(repoDir), script)
 	}
+}
+
+// TestIntegration_BumpRemotedialerOnRancher replays the production failure
+// where rancher/frameworks-automation#43 opened rancher/rancher#55105 with
+// the misleading title "Bump dummy/fakek8s to v0.6.1" and a diff that only
+// touched gotools/mockery/go.sum. Root cause: DiscoverModules picked up
+// rancher/remotedialer's examples/fakek8s/go.mod (alphabetically before the
+// root go.mod) and RootModulePath returned "dummy/fakek8s" instead of the
+// canonical github.com/rancher/remotedialer.
+//
+// The test runs the same code path the reconciler uses in production —
+// config.Load + DiscoverModules against a real GitHub client, then
+// Bumper.applyBundle against rancher/rancher pinned at the SHA the bot
+// cloned when it produced the broken PR — and asserts both:
+//
+//   1. RootModulePath("remotedialer") returns the canonical module.
+//   2. The bumper's diff touches root go.mod and go.sum (not just unrelated
+//      submodule go.sum churn from the post-bundle tidy).
+//
+// Pre-fix this fails at step 1; post-fix it passes through step 2.
+func TestIntegration_BumpRemotedialerOnRancher(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go not on PATH")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+
+	const (
+		rancherURL = "https://github.com/rancher/rancher.git"
+		pinnedSHA  = "e69897f9b6b5c5ea986667a19971c38104191908"
+		depTag     = "v0.6.1"
+	)
+
+	ctx := context.Background()
+	repoDir := filepath.Join(t.TempDir(), "repo")
+	checkoutAtSHA(t, ctx, repoDir, rancherURL, pinnedSHA)
+
+	cfg, err := config.Load("../../dependencies/rancher.yaml")
+	if err != nil {
+		t.Fatalf("load dependencies/rancher.yaml: %v", err)
+	}
+	gh := ghclient.NewClient(ctx, nil) // unauthenticated public-repo reads
+	if err := cfg.DiscoverModules(ctx, gh); err != nil {
+		t.Fatalf("DiscoverModules: %v", err)
+	}
+	modPath := cfg.RootModulePath("remotedialer")
+	if modPath != "github.com/rancher/remotedialer" {
+		t.Fatalf("RootModulePath(remotedialer) = %q, want github.com/rancher/remotedialer "+
+			"(if you see %q here, the discovery filter regressed and is picking up "+
+			"the examples/fakek8s submodule again)", modPath, modPath)
+	}
+
+	b := NewBumper(nil, nil)
+	req := Request{
+		Repo:       "rancher/rancher",
+		BaseBranch: "main",
+		HeadBranch: "test-bump-remotedialer-v0.6.1",
+		Modules: []Module{
+			{Path: modPath, Version: depTag, Strategy: config.StrategyGoGet},
+		},
+	}
+	result, err := b.applyBundle(ctx, repoDir, req)
+	if err != nil {
+		t.Fatalf("applyBundle: %v", err)
+	}
+	if result != nil && result.NoOp {
+		t.Fatalf("applyBundle returned NoOp — expected a real diff "+
+			"(rancher/rancher@%s should be on a remotedialer < %s)", pinnedSHA, depTag)
+	}
+
+	changed := captureGitDiffNames(t, ctx, repoDir, "HEAD~1", "HEAD")
+	if !slices.Contains(changed, "go.mod") || !slices.Contains(changed, "go.sum") {
+		t.Fatalf("expected root go.mod and go.sum in diff, got: %v "+
+			"(if the diff is only gotools/<x>/go.sum, the dummy/fakek8s bug is back)", changed)
+	}
+}
+
+// captureGitDiffNames returns `git diff --name-only <args...>` as a slice of
+// paths, one per line, with empties dropped.
+func captureGitDiffNames(t *testing.T, ctx context.Context, dir string, args ...string) []string {
+	t.Helper()
+	cmd := exec.CommandContext(ctx, "git", append([]string{"diff", "--name-only"}, args...)...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git diff --name-only %v in %s: %v", args, dir, err)
+	}
+	var paths []string
+	for _, line := range strings.Split(string(out), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			paths = append(paths, line)
+		}
+	}
+	return paths
 }
 
 // runOrFail executes name+args in dir, streams stdio, and t.Fatalf's on
