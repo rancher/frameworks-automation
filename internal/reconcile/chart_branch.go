@@ -7,15 +7,15 @@ import (
 	"github.com/rancher/release-automation/internal/config"
 )
 
-// strategyUsesChartBranch reports whether `s` is a rancher-side script
-// strategy that needs CHART_BRANCH to look up a chart-prefixed version from
+// strategyUsesChartRef reports whether `s` is a rancher-side script
+// strategy that needs CHART_REF to look up a chart-prefixed version from
 // rancher/charts' index.yaml.
-func strategyUsesChartBranch(s config.Strategy) bool {
+func strategyUsesChartRef(s config.Strategy) bool {
 	return s == config.StrategyBumpWebhook || s == config.StrategyBumpRemotedialerProxy
 }
 
-// chartBranchForLeaf returns the rancher/charts branch corresponding to the
-// given leaf-rancher branch, for use as CHART_BRANCH by rancher-side bump
+// chartRefForLeaf returns the rancher/charts branch corresponding to the
+// given leaf-rancher branch, for use as CHART_REF by rancher-side bump
 // scripts. The chart repo is identified by scanning the config for any repo
 // that declares a chart-side bump strategy in its deps; this avoids
 // hardcoding the chart's config-key name.
@@ -24,7 +24,7 @@ func strategyUsesChartBranch(s config.Strategy) bool {
 // chart bumping in this DAG, so no lookup is needed). Returns an error when
 // the leaf branch isn't in rancher's VERSION.md or chart-branch resolution
 // otherwise fails.
-func (r *Reconciler) chartBranchForLeaf(ctx context.Context, leafBranch string) (string, error) {
+func (r *Reconciler) chartRefForLeaf(ctx context.Context, leafBranch string) (string, error) {
 	chartRepoName, chartCfg, ok := r.findChartRepo()
 	if !ok {
 		return "", nil

@@ -52,6 +52,14 @@ import (
 // that doesn't pass them locally would be rejected upstream. Running
 // them here surfaces the rejection in our own CI instead.
 //
+// CHART_REF for the script strategies is pinned to a rancher/charts
+// SHA (not the live dev-v2.15 branch) so the test is reproducible: the
+// bump-webhook / bump-remotedialer-proxy scripts curl index.yaml to
+// resolve their chart-prefixed version, and chart maintainers prune old
+// appVersion entries from the branch over time. The pinned chart SHA
+// still has all the appVersions this test requests; advancing it is a
+// deliberate test edit, not the result of upstream churn.
+//
 // Strategies executed (cascade #19 stage-3 dispatch order):
 //   - go-get  apiserver           v0.9.4
 //   - go-get  norman              v0.9.4
@@ -67,8 +75,9 @@ func TestIntegration_BumpCascade19Stage3(t *testing.T) {
 	}
 
 	const (
-		repoURL   = "https://github.com/rancher/rancher.git"
-		pinnedSHA = "dbfeb8d41c72ba7a440f98c6dd34667eeb3e263d"
+		repoURL      = "https://github.com/rancher/rancher.git"
+		pinnedSHA    = "dbfeb8d41c72ba7a440f98c6dd34667eeb3e263d"
+		chartPinned  = "edbd1d0ed1ae5204de5c92336bfc3b3846471fb8" // rancher/charts SHA carrying all appVersions this test bumps to
 	)
 
 	ctx := context.Background()
@@ -89,9 +98,9 @@ func TestIntegration_BumpCascade19Stage3(t *testing.T) {
 		Modules: []Module{
 			{Path: "github.com/rancher/apiserver", Version: "v0.9.4", Strategy: config.StrategyGoGet},
 			{Path: "github.com/rancher/norman", Version: "v0.9.4", Strategy: config.StrategyGoGet},
-			{Path: "github.com/rancher/remotedialer-proxy", Version: "v0.8.0-rc.4", Strategy: config.StrategyBumpRemotedialerProxy, ChartBranch: "dev-v2.15"},
+			{Path: "github.com/rancher/remotedialer-proxy", Version: "v0.8.0-rc.4", Strategy: config.StrategyBumpRemotedialerProxy, ChartRef: chartPinned},
 			{Path: "github.com/rancher/steve", Version: "v0.9.8", Strategy: config.StrategyGoGet},
-			{Path: "github.com/rancher/webhook", Version: "v0.11.0-rc.6", Strategy: config.StrategyBumpWebhook, ChartBranch: "dev-v2.15"},
+			{Path: "github.com/rancher/webhook", Version: "v0.11.0-rc.6", Strategy: config.StrategyBumpWebhook, ChartRef: chartPinned},
 		},
 	}
 	result, err := b.applyBundle(ctx, repoDir, req)
@@ -100,7 +109,7 @@ func TestIntegration_BumpCascade19Stage3(t *testing.T) {
 			"(if this is 'missing go.sum entry' from a script's go generate, "+
 			"runGoGet stopped tidying)", err)
 	}
-	if result != nil && result.NoOp {
+	if result.NoOp {
 		t.Fatalf("applyBundle returned NoOp — expected a real diff against the pinned commit, got: %s", result.Notes)
 	}
 
@@ -180,16 +189,110 @@ func TestIntegration_BumpRemotedialerOnRancher(t *testing.T) {
 	if err != nil {
 		t.Fatalf("applyBundle: %v", err)
 	}
-	if result != nil && result.NoOp {
+	if result.NoOp {
 		t.Fatalf("applyBundle returned NoOp — expected a real diff "+
 			"(rancher/rancher@%s should be on a remotedialer < %s)", pinnedSHA, depTag)
 	}
 
-	changed := captureGitDiffNames(t, ctx, repoDir, "HEAD~1", "HEAD")
+	// Diff from the base SHA (not HEAD~1) so the assertion covers every
+	// commit applyBundle made: the per-strategy `Bump remotedialer` and
+	// the trailing `go mod tidy / vendor` commit each carry distinct
+	// changes, and the dummy/fakek8s regression manifests in the
+	// strategy commit, not the housekeeping one.
+	changed := captureGitDiffNames(t, ctx, repoDir, pinnedSHA, "HEAD")
 	if !slices.Contains(changed, "go.mod") || !slices.Contains(changed, "go.sum") {
 		t.Fatalf("expected root go.mod and go.sum in diff, got: %v "+
 			"(if the diff is only gotools/<x>/go.sum, the dummy/fakek8s bug is back)", changed)
 	}
+}
+
+// TestIntegration_BumpSteveDropsApiserverWhenAlreadyAtTarget replays
+// the rancher/steve#1215 production case against real go-get: a cascade
+// bundled apiserver + norman bumps onto steve, but steve's go.mod at
+// the pinned commit already required the target apiserver version. The
+// per-strategy commit path must drop apiserver from Result.Bumped and
+// from the commit history, leaving norman as the only bump.
+//
+// At rancher/steve@9641b46148890b6444811cf56ed7148665cae8e0 go.mod pins
+// apiserver v0.9.6 and norman v0.9.5; bumping both to v0.9.6 exercises
+// the no-op/dirty split end-to-end with the real go-get strategy.
+func TestIntegration_BumpSteveDropsApiserverWhenAlreadyAtTarget(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go not on PATH")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not on PATH")
+	}
+
+	const (
+		repoURL   = "https://github.com/rancher/steve.git"
+		pinnedSHA = "9641b46148890b6444811cf56ed7148665cae8e0"
+	)
+
+	ctx := context.Background()
+	repoDir := filepath.Join(t.TempDir(), "repo")
+	checkoutAtSHA(t, ctx, repoDir, repoURL, pinnedSHA)
+
+	b := NewBumper(nil, nil)
+	req := Request{
+		Repo:       "rancher/steve",
+		BaseBranch: "main",
+		HeadBranch: "test-steve-apiserver-noop",
+		Modules: []Module{
+			{Path: "github.com/rancher/apiserver", Version: "v0.9.6", Strategy: config.StrategyGoGet},
+			{Path: "github.com/rancher/norman", Version: "v0.9.6", Strategy: config.StrategyGoGet},
+		},
+	}
+	result, err := b.applyBundle(ctx, repoDir, req)
+	if err != nil {
+		t.Fatalf("applyBundle: %v", err)
+	}
+	if result.NoOp {
+		t.Fatalf("expected commit (norman should change), got NoOp: %s", result.Notes)
+	}
+	if len(result.Bumped) != 1 || result.Bumped[0].Path != "github.com/rancher/norman" {
+		t.Fatalf("Bumped: got %+v, want [github.com/rancher/norman] "+
+			"(apiserver should drop out — go.mod at %s already pins v0.9.6)",
+			result.Bumped, pinnedSHA)
+	}
+
+	// The commit history must contain a Bump-norman commit and must not
+	// mention apiserver in any subject. A trailing "go mod tidy / vendor"
+	// commit may or may not appear depending on whether norman's bump
+	// touched go.sum entries it shares with the rest of the tree; either
+	// way no commit should mention apiserver.
+	subjects := captureCommitSubjects(t, ctx, repoDir, pinnedSHA)
+	bumpCount := 0
+	for _, s := range subjects {
+		if strings.Contains(s, "github.com/rancher/apiserver") {
+			t.Errorf("no commit may mention apiserver (already at target), got: %q", s)
+		}
+		if strings.HasPrefix(s, "Bump ") {
+			bumpCount++
+		}
+	}
+	if bumpCount != 1 {
+		t.Errorf("expected exactly 1 Bump commit (norman), got %d: %v", bumpCount, subjects)
+	}
+}
+
+// captureCommitSubjects returns commit subjects in `dir` reachable from
+// HEAD but not from `base`, in chronological (oldest-first) order.
+func captureCommitSubjects(t *testing.T, ctx context.Context, dir, base string) []string {
+	t.Helper()
+	cmd := exec.CommandContext(ctx, "git", "log", "--reverse", "--pretty=%s", base+"..HEAD")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git log %s..HEAD: %v", base, err)
+	}
+	var subjects []string
+	for _, line := range strings.Split(string(out), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			subjects = append(subjects, line)
+		}
+	}
+	return subjects
 }
 
 // captureGitDiffNames returns `git diff --name-only <args...>` as a slice of
@@ -272,7 +375,7 @@ func TestIntegration_BumpRancherSyncDeps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("applyBundle: %v", err)
 	}
-	if result != nil && result.NoOp {
+	if result.NoOp {
 		t.Fatalf("applyBundle returned NoOp — expected a real diff against the pinned commit, got: %s", result.Notes)
 	}
 
