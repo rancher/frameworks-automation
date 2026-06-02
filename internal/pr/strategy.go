@@ -131,8 +131,8 @@ func (s scriptStrategy) Apply(ctx context.Context, repoDir string, m Module) err
 		return fmt.Errorf("script strategy %q: close: %w", s.name, err)
 	}
 	env := toolchainEnv(repoDir)
-	if m.ChartBranch != "" {
-		env = append(env, "CHART_BRANCH="+m.ChartBranch)
+	if m.ChartRef != "" {
+		env = append(env, "CHART_REF="+m.ChartRef)
 	}
 	return run(ctx, repoDir, env, f.Name(), m.Version)
 }
