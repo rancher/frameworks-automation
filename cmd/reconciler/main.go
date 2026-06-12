@@ -132,9 +132,9 @@ func main() {
 	}
 }
 
-// runCron runs RunCron against every loaded reconciler. One config's failure
-// is logged and the sweep continues — exit non-zero only when every config
-// fails (otherwise a single broken config would blank the whole cron tick).
+// runCron runs RunCron against every loaded reconciler. Each config's failure
+// is logged and the sweep continues so a single broken config doesn't skip
+// the others — but any failure exits non-zero so CI catches it.
 func runCron(ctx context.Context, cfgs map[string]*config.Config, reconcilers map[string]*reconcile.Reconciler) {
 	failures := 0
 	for _, name := range sortedNames(cfgs) {
@@ -143,8 +143,8 @@ func runCron(ctx context.Context, cfgs map[string]*config.Config, reconcilers ma
 			failures++
 		}
 	}
-	if failures == len(cfgs) {
-		log.Fatalf("cron: all %d configs failed", failures)
+	if failures > 0 {
+		log.Fatalf("cron: %d/%d configs failed", failures, len(cfgs))
 	}
 }
 

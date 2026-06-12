@@ -202,11 +202,11 @@ func (b *Bumper) applyBundle(ctx context.Context, repoDir string, req Request) (
 			return nil, fmt.Errorf("find go.mod files for tidy: %w", err)
 		}
 		for _, dir := range dirs {
-			if err := run(ctx, dir, nil, "go", "mod", "tidy"); err != nil {
+			if err := run(ctx, dir, toolchainEnv(dir), "go", "mod", "tidy"); err != nil {
 				return nil, err
 			}
 			if hasVendor(dir) {
-				if err := run(ctx, dir, nil, "go", "mod", "vendor"); err != nil {
+				if err := run(ctx, dir, toolchainEnv(dir), "go", "mod", "vendor"); err != nil {
 					return nil, err
 				}
 			}
