@@ -129,12 +129,12 @@ func (r *Reconciler) bumpTarget(ctx context.Context, dep, version, leafBranch, d
 	}
 	strat := downstream.DepStrategy(dep)
 	module := pr.Module{Path: depModule, Version: version, Strategy: strat}
-	if strategyUsesChartBranch(strat) {
-		chartBranch, err := r.chartBranchForLeaf(ctx, leafBranch)
+	if strategyUsesChartRef(strat) {
+		chartRef, err := r.chartRefForLeaf(ctx, leafBranch)
 		if err != nil {
-			return false, fmt.Errorf("resolve CHART_BRANCH for %s on %s: %w", dep, target.Repo, err)
+			return false, fmt.Errorf("resolve CHART_REF for %s on %s: %w", dep, target.Repo, err)
 		}
-		module.ChartBranch = chartBranch
+		module.ChartRef = chartRef
 	}
 	req := pr.Request{
 		Repo:        downstreamGH,

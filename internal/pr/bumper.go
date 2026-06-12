@@ -67,12 +67,12 @@ type Module struct {
 	Version  string          // e.g. "v0.7.5"
 	Strategy config.Strategy // empty == config.StrategyGoGet
 
-	// ChartBranch, when non-empty, is exposed to script strategies via the
-	// CHART_BRANCH environment variable. Used by bump-webhook and
+	// ChartRef, when non-empty, is exposed to script strategies via the
+	// CHART_REF environment variable. Used by bump-webhook and
 	// bump-remotedialer-proxy to resolve `<chart>+up<dep>` from
-	// rancher/charts' index.yaml on that branch (e.g. "dev-v2.15"). Other
-	// strategies ignore it.
-	ChartBranch string
+	// rancher/charts' index.yaml at that ref (branch name, tag, or commit
+	// SHA). Other strategies ignore it.
+	ChartRef string
 }
 
 type Result struct {
