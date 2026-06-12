@@ -206,12 +206,12 @@ func (r *Reconciler) openCascadeStageBumps(ctx context.Context, op *cascade.Op, 
 	if stage < 0 || stage >= len(op.Stages) {
 		return false, nil
 	}
-	chartBranch := ""
-	if stageNeedsChartBranch(op.Stages[stage]) {
+	chartRef := ""
+	if stageNeedsChartRef(op.Stages[stage]) {
 		var err error
-		chartBranch, err = r.chartBranchForLeaf(ctx, op.LeafBranch)
+		chartRef, err = r.chartRefForLeaf(ctx, op.LeafBranch)
 		if err != nil {
-			return false, fmt.Errorf("resolve CHART_BRANCH for cascade stage %d: %w", stage, err)
+			return false, fmt.Errorf("resolve CHART_REF for cascade stage %d: %w", stage, err)
 		}
 	}
 	mutated := false
@@ -233,7 +233,7 @@ func (r *Reconciler) openCascadeStageBumps(ctx context.Context, op *cascade.Op, 
 			Fork:        downstream.Fork,
 			BaseBranch:  bp.Branch,
 			HeadBranch:  cascadeBumpBranchName(issueNum, bp.Repo, bp.Branch),
-			Modules:     bumpModules(bp, chartBranch),
+			Modules:     bumpModules(bp, chartRef),
 			TrackerURL:  trackerURL,
 			Assignees:   actorAssignees(op.TriggeredBy),
 			PostBundle:  downstream.PostBundle,
@@ -404,25 +404,25 @@ func bumpReady(bp *cascade.Bump) bool {
 	return true
 }
 
-func bumpModules(bp *cascade.Bump, chartBranch string) []pr.Module {
+func bumpModules(bp *cascade.Bump, chartRef string) []pr.Module {
 	out := make([]pr.Module, len(bp.Deps))
 	for i, d := range bp.Deps {
 		m := pr.Module{Path: d.Module, Version: d.Version, Strategy: d.Strategy}
-		if strategyUsesChartBranch(d.Strategy) {
-			m.ChartBranch = chartBranch
+		if strategyUsesChartRef(d.Strategy) {
+			m.ChartRef = chartRef
 		}
 		out[i] = m
 	}
 	return out
 }
 
-// stageNeedsChartBranch reports whether any bump in `stage` uses a strategy
-// that needs CHART_BRANCH. Used to skip the resolver call when no module in
+// stageNeedsChartRef reports whether any bump in `stage` uses a strategy
+// that needs CHART_REF. Used to skip the resolver call when no module in
 // the stage will consume it.
-func stageNeedsChartBranch(stage cascade.Stage) bool {
+func stageNeedsChartRef(stage cascade.Stage) bool {
 	for _, bp := range stage.Bumps {
 		for _, d := range bp.Deps {
-			if strategyUsesChartBranch(d.Strategy) {
+			if strategyUsesChartRef(d.Strategy) {
 				return true
 			}
 		}

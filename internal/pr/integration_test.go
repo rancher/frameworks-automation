@@ -89,9 +89,9 @@ func TestIntegration_BumpCascade19Stage3(t *testing.T) {
 		Modules: []Module{
 			{Path: "github.com/rancher/apiserver", Version: "v0.9.4", Strategy: config.StrategyGoGet},
 			{Path: "github.com/rancher/norman", Version: "v0.9.4", Strategy: config.StrategyGoGet},
-			{Path: "github.com/rancher/remotedialer-proxy", Version: "v0.8.0-rc.4", Strategy: config.StrategyBumpRemotedialerProxy, ChartBranch: "dev-v2.15"},
+			{Path: "github.com/rancher/remotedialer-proxy", Version: "v0.8.0-rc.4", Strategy: config.StrategyBumpRemotedialerProxy, ChartRef: "51bffcecc05a3a01f3d8833d3a07f57ebb92d176"},
 			{Path: "github.com/rancher/steve", Version: "v0.9.8", Strategy: config.StrategyGoGet},
-			{Path: "github.com/rancher/webhook", Version: "v0.11.0-rc.6", Strategy: config.StrategyBumpWebhook, ChartBranch: "dev-v2.15"},
+			{Path: "github.com/rancher/webhook", Version: "v0.11.0-rc.6", Strategy: config.StrategyBumpWebhook, ChartRef: "51bffcecc05a3a01f3d8833d3a07f57ebb92d176"},
 		},
 	}
 	result, err := b.applyBundle(ctx, repoDir, req)
