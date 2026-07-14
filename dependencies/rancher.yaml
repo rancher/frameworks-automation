@@ -120,6 +120,7 @@ repos:
     kind: paired
     repo: rancher/steve
     token-env: GH_TOKEN_STEVE
+    allowCronBump: true
     deps:
       - {name: apiserver}
       - {name: norman}

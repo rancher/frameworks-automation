@@ -71,7 +71,7 @@ func (r *Reconciler) checkUpstream(ctx context.Context, name string) error {
 		return nil
 	}
 	log.Printf("pass1Cron: synthesizing dispatch for %s %s -> %s %s (no tracker found)", name, tag, leaves[0], leafBranch)
-	return r.pass1Dispatch(ctx, DispatchEvent{Repo: ghRepo, Tag: tag})
+	return r.pass1Dispatch(ctx, DispatchEvent{Repo: ghRepo, Tag: tag}, true)
 }
 
 // alreadyProcessed reports whether a tracker for (config, dep, version,

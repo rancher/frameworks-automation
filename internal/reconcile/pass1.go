@@ -24,7 +24,7 @@ import (
 // for this dep, the cascade claims it (records version+Tagged=true) and
 // pass1Dispatch returns early — the cascade owns the downstream propagation
 // for this tag, opening its next stage's bumps in passCascade.
-func (r *Reconciler) pass1Dispatch(ctx context.Context, ev DispatchEvent) error {
+func (r *Reconciler) pass1Dispatch(ctx context.Context, ev DispatchEvent, isCron bool) error {
 	if !semver.IsValid(ev.Tag) {
 		return fmt.Errorf("invalid tag %q (not semver)", ev.Tag)
 	}
@@ -43,6 +43,11 @@ func (r *Reconciler) pass1Dispatch(ctx context.Context, ev DispatchEvent) error 
 	}
 	if claimed {
 		log.Printf("pass1: %s %s claimed by an open cascade — skipping regular bump", dep, ev.Tag)
+		return nil
+	}
+
+	if isCron && !r.cfg.Repos[dep].AllowCronBump {
+		log.Println("pass1: skipping bump dep via cron", dep, ev.Tag)
 		return nil
 	}
 

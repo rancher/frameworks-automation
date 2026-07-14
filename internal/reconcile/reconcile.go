@@ -2,11 +2,13 @@
 // and dispatches into the focused packages (drift, pr, tracker).
 //
 // Pass 1 — detect new upstream releases (or react to a dispatch event) and
-//          open bump PRs in target downstreams. Materialize tracker issues.
+// open bump PRs in target downstreams. Materialize tracker issues.
+//
 // Pass 2 — poll PR state for every open tracker. Tick checkboxes, close
-//          trackers when all targets merged.
+// trackers when all targets merged.
+//
 // Pass 3 — drift check on notify-only branches (independent libs on
-//          release/*).
+// release/*).
 package reconcile
 
 import (
@@ -114,7 +116,7 @@ func (r *Reconciler) RunCron(ctx context.Context) error {
 // upstream discovery and goes straight to opening PRs for that tag, then
 // runs the remaining passes so any in-flight ops keep moving.
 func (r *Reconciler) RunDispatch(ctx context.Context, ev DispatchEvent) error {
-	if err := r.pass1Dispatch(ctx, ev); err != nil {
+	if err := r.pass1Dispatch(ctx, ev, false); err != nil {
 		return fmt.Errorf("pass 1 (dispatch %s@%s): %w", ev.Repo, ev.Tag, err)
 	}
 	return r.passesAfter1(ctx)
