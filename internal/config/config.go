@@ -118,8 +118,9 @@ type Repo struct {
 	// PostBundle lists hooks to run after the bundle's strategies + tidy pass
 	// have settled the working tree, before the commit. Hooks run in list
 	// order. See internal/pr for the registered set.
-	PostBundle []PostBundleHook `yaml:"post-bundle,omitempty"`
-	Deps       []Dep            `yaml:"deps"`
+	PostBundle    []PostBundleHook `yaml:"post-bundle,omitempty"`
+	Deps          []Dep            `yaml:"deps"`
+	AllowCronBump bool             `yaml:"allowCronBump"`
 }
 
 // GitHubRepo returns the GitHub owner/name for this repo.

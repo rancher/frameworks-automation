@@ -2,6 +2,7 @@ package reconcile
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -80,9 +81,9 @@ func TestCascadeComplete(t *testing.T) {
 
 func TestLeafFromLabels(t *testing.T) {
 	cases := []struct {
-		name              string
-		labels            []string
-		wantRepo, wantBr  string
+		name             string
+		labels           []string
+		wantRepo, wantBr string
 	}{
 		{"main", []string{"cascade-op", "dep:wrangler", "leaf:rancher:main"}, "rancher", "main"},
 		{"release branch", []string{"leaf:rancher:release/v2.13"}, "rancher", "release/v2.13"},
@@ -230,6 +231,39 @@ func TestPollCascadeTags_ClaimsPrereleaseFromReleasePoll(t *testing.T) {
 	}
 }
 
+func TestCron_OnlyBumpSteve(t *testing.T) {
+	const rancherVersionMD = `Rancher follows ...
+
+| Rancher Branch | Rancher Minor |
+|----------------|---------------|
+| main           | v2.15         |
+`
+	const steveVersionMD = `Steve follows ...
+
+| Steve Branch | Steve Minor version | Matching Rancher Version |
+|----------------|-----------------------|--------------------------|
+| main | v0.7 | v2.15 |
+`
+	cfg := &config.Config{Repos: map[string]config.Repo{
+		"rancher":         {Kind: config.KindLeaf, Repo: "x/rancher", VersionMD: rancherVersionMD, Deps: []config.Dep{{Name: "steve"}, {Name: "dynamiclistener"}}},
+		"steve":           {Kind: config.KindPaired, Repo: "x/steve", AllowCronBump: true, VersionMD: steveVersionMD},
+		"dynamiclistener": {Kind: config.KindIndependent, Repo: "x/dynamiclistener"},
+	}}
+	gh := newFakeGH(map[string]*fakeRepoState{
+		"x/rancher":         {},
+		"x/dynamiclistener": {Tags: []string{"v0.6.5"}},
+		"x/steve":           {Tags: []string{"v0.7.0"}},
+	})
+	r := newWithDeps("test", cfg, Settings{AutomationRepo: "owner/auto", Tokens: map[string]string{"owner/auto": "x"}}, gh, newFakeBumper(gh))
+	r.RunCron(t.Context())
+	if len(gh.snapshotIssues()) != 1 {
+		t.Fatal("expected issue created for steve")
+	}
+	if !slices.Contains(gh.snapshotIssues()[0].Labels, "dep:steve") {
+		t.Fatal("expected issue created for steve with steve labels")
+	}
+}
+
 // TestPollCascadeTags_SkipsWhenBumpsNotMerged ensures the same gate as
 // tryClaimCascadeTag: a tag emitted before the stage's bumps merge does
 // not retroactively claim the slot — that would short-circuit the
@@ -303,11 +337,11 @@ func TestPollCascadeTags_SkipsStalePriorCycleTag(t *testing.T) {
 
 func TestCascadeBumpBranchName(t *testing.T) {
 	cases := []struct {
-		name         string
-		issue        int
-		bumpRepo     string
-		bumpBranch   string
-		want         string
+		name       string
+		issue      int
+		bumpRepo   string
+		bumpBranch string
+		want       string
 	}{
 		{"main", 42, "rancher", "main", "automation/cascade-42-bump-rancher-main"},
 		{"release branch slashes flattened", 99, "steve", "release/v0.7", "automation/cascade-99-bump-steve-release-v0.7"},
