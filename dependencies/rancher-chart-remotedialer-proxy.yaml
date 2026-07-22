@@ -17,7 +17,8 @@ repos:
     version-md: |
       | Rancher Branch | Rancher Minor |
       |----------------|---------------|
-      | main           | v2.15         |
+      | main           | v2.16         |
+      | release/v2.15  | v2.15         |
       | release/v2.14  | v2.14         |
       | release/v2.13  | v2.13         |
       | release/v2.12  | v2.12         |
