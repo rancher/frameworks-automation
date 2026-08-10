@@ -185,6 +185,104 @@ func has(labels []string, want string) bool {
 	return false
 }
 
+func TestAcceptableCascadeTag(t *testing.T) {
+	cases := []struct {
+		name     string
+		expected string
+		got      string
+		want     bool
+	}{
+		{"no expected hint accepts anything", "", "v0.12.0", true},
+		{"exact match", "v0.11.1-rc.1", "v0.11.1-rc.1", true},
+		{"same minor, higher rc", "v0.11.1-rc.1", "v0.11.1-rc.2", true},
+		{"same minor, below expected", "v0.11.1-rc.2", "v0.11.1-rc.1", false},
+		{"different minor entirely (the #183 bug)", "v0.11.1-rc.1", "v0.12.0", false},
+		{"different minor, lower", "v0.11.1-rc.1", "v0.10.9", false},
+		{"invalid candidate", "v0.11.1-rc.1", "not-a-version", false},
+		{"invalid expected", "not-a-version", "v0.11.1-rc.1", false},
+	}
+	for _, c := range cases {
+		if got := acceptableCascadeTag(c.expected, c.got); got != c.want {
+			t.Errorf("%s: acceptableCascadeTag(%q, %q) = %v, want %v", c.name, c.expected, c.got, got, c.want)
+		}
+	}
+}
+
+// TestTryClaimCascadeTag_RejectsUnrelatedMinor is a regression test for
+// frameworks-automation#183: a cascade cuts an RC on a release branch
+// (Expected: v0.11.1-rc.1) while an unrelated routine release lands on the
+// same repo's main branch on a different minor (v0.12.0). The dispatch for
+// that unrelated release must not satisfy this cascade's TagPrompt — before
+// the fix, tryClaimCascadeTag matched on repo name alone and claimed
+// whichever version showed up first, propagating v0.12.0 into the chart and
+// rancher bumps instead of the actual v0.11.1-rc.1 tag.
+func TestTryClaimCascadeTag_RejectsUnrelatedMinor(t *testing.T) {
+	cfg := &config.Config{Repos: map[string]config.Repo{
+		"rancher": {Kind: config.KindLeaf, Repo: "x/rancher"},
+		"webhook": {Kind: config.KindPaired, Repo: "x/webhook"},
+	}}
+	gh := newFakeGH(nil)
+
+	op := cascade.Op{
+		LeafRepo:   "rancher",
+		LeafBranch: "release/v2.15",
+		Stages: []cascade.Stage{
+			{
+				Layer: 1,
+				Bumps: []cascade.Bump{{Repo: "webhook", Branch: "release/v0.11", State: "merged"}},
+				Tags:  []cascade.TagPrompt{{Repo: "webhook", Branch: "release/v0.11", Expected: "v0.11.1-rc.1"}},
+			},
+		},
+	}
+	body, err := cascade.Render(op, time.Date(2026, 8, 5, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	gh.CreateIssue(context.Background(), "owner/auto",
+		cascade.Title("test", "rancher", "release/v2.15"), body,
+		cascade.Labels("test", "rancher", "release/v2.15"), nil)
+
+	r := newWithDeps("test", cfg, Settings{AutomationRepo: "owner/auto", Tokens: map[string]string{"owner/auto": "x"}}, gh, newFakeBumper(gh))
+
+	// The unrelated main-branch release dispatches first.
+	claimed, err := r.tryClaimCascadeTag(context.Background(), "webhook", "v0.12.0")
+	if err != nil {
+		t.Fatalf("tryClaimCascadeTag: %v", err)
+	}
+	if claimed {
+		t.Fatal("v0.12.0 is off the v0.11 lineage the cascade is waiting on — must not be claimed")
+	}
+	for _, issue := range gh.snapshotIssues() {
+		st, err := cascade.ExtractState(issue.Body)
+		if err != nil {
+			t.Fatalf("extract: %v", err)
+		}
+		tg := st.Stages[0].Tags[0]
+		if tg.Tagged || tg.Version != "" {
+			t.Fatalf("cascade must remain unclaimed, got %+v", tg)
+		}
+	}
+
+	// The real release-branch RC dispatches afterward and must be claimed.
+	claimed, err = r.tryClaimCascadeTag(context.Background(), "webhook", "v0.11.1-rc.1")
+	if err != nil {
+		t.Fatalf("tryClaimCascadeTag: %v", err)
+	}
+	if !claimed {
+		t.Fatal("v0.11.1-rc.1 matches Expected — should have been claimed")
+	}
+	for _, issue := range gh.snapshotIssues() {
+		st, err := cascade.ExtractState(issue.Body)
+		if err != nil {
+			t.Fatalf("extract: %v", err)
+		}
+		tg := st.Stages[0].Tags[0]
+		if !tg.Tagged || tg.Version != "v0.11.1-rc.1" {
+			t.Fatalf("cascade should now record the real RC, got %+v", tg)
+		}
+	}
+}
+
 // TestPollCascadeTags_ClaimsPrereleaseFromReleasePoll verifies the cron
 // safety net catches tags the dispatch path missed — specifically a
 // pre-release like webhook v0.11.0-rc.6 that GetLatestReleaseTag (used by
