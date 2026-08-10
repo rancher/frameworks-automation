@@ -305,6 +305,27 @@ func (r *Reconciler) pollCascadeTags(ctx context.Context, op *cascade.Op, issueN
 	return mutated, nil
 }
 
+// acceptableCascadeTag reports whether `candidate` can satisfy a TagPrompt
+// whose Expected hint is `expected`. An empty expected accepts anything (the
+// hint is only set when predict succeeded — see pollCascadeTags' doc
+// comment). Otherwise candidate must be valid semver, on the same
+// major.minor lineage as expected, and >= expected — this is what stops an
+// unrelated later release (e.g. a routine bump on a different minor, or a
+// stale prior-cycle tag) from being mistaken for the tag a cascade stage is
+// actually waiting on.
+func acceptableCascadeTag(expected, candidate string) bool {
+	if expected == "" {
+		return true
+	}
+	if !semver.IsValid(expected) || !semver.IsValid(candidate) {
+		return false
+	}
+	if semver.MajorMinor(candidate) != semver.MajorMinor(expected) {
+		return false
+	}
+	return semver.Compare(candidate, expected) >= 0
+}
+
 // findReleasedTagAtOrAbove returns the highest published release tag in
 // `repoName` that is on the same minor as `expected` and orders semver
 // >= expected. Returns "" with no error when no such release exists yet.
@@ -320,17 +341,13 @@ func (r *Reconciler) findReleasedTagAtOrAbove(ctx context.Context, repoName, exp
 	if !semver.IsValid(expected) {
 		return "", fmt.Errorf("expected %q is not valid semver", expected)
 	}
-	minor := semver.MajorMinor(expected)
 	tags, err := r.gh.ListReleaseTags(ctx, ghRepo)
 	if err != nil {
 		return "", err
 	}
 	var best string
 	for _, t := range tags {
-		if !semver.IsValid(t) || semver.MajorMinor(t) != minor {
-			continue
-		}
-		if semver.Compare(t, expected) < 0 {
+		if !acceptableCascadeTag(expected, t) {
 			continue
 		}
 		if best == "" || semver.Compare(t, best) > 0 {
@@ -375,6 +392,13 @@ func (r *Reconciler) tryClaimCascadeTag(ctx context.Context, dep, version string
 		for j := range st.Stages[st.CurrentStage].Tags {
 			tg := &st.Stages[st.CurrentStage].Tags[j]
 			if tg.Repo != dep || tg.Tagged {
+				continue
+			}
+			if !acceptableCascadeTag(tg.Expected, version) {
+				// A same-repo tag exists, but it's off the lineage this
+				// prompt is waiting on (e.g. a routine release on a
+				// different minor). Not a claim -- fall through to the
+				// regular bump path for it instead.
 				continue
 			}
 			tg.Version = version
