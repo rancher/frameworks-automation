@@ -396,15 +396,23 @@ func (c *Client) HasApproval(ctx context.Context, repo string, number int) (bool
 	return false, nil
 }
 
-// ApprovePR submits an APPROVE review on the PR.
-func (c *Client) ApprovePR(ctx context.Context, repo string, number int, body string) error {
+// ApprovePR submits an APPROVE review on the PR, pinned to sha.
+//
+// Pinning matters: callers decide whether to approve by inspecting a specific
+// head commit (check runs, etc.), and Renovate force-pushes rebases
+// constantly. Without CommitID, GitHub attaches the review to whatever the
+// head is at submit time, which could be a commit nothing has validated.
+// With it, a review racing a force-push lands on the commit that was actually
+// reviewed — stale rather than wrong.
+func (c *Client) ApprovePR(ctx context.Context, repo string, number int, sha, body string) error {
 	owner, name, err := splitRepo(repo)
 	if err != nil {
 		return err
 	}
 	_, _, err = c.clientFor(repo).PullRequests.CreateReview(ctx, owner, name, number, &gh.PullRequestReviewRequest{
-		Event: gh.String("APPROVE"),
-		Body:  &body,
+		CommitID: &sha,
+		Event:    gh.String("APPROVE"),
+		Body:     &body,
 	})
 	if err != nil {
 		return fmt.Errorf("approve PR %s#%d: %w", repo, number, err)

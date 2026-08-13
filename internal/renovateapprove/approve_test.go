@@ -21,11 +21,13 @@ type fakeGH struct {
 	approveErr map[string]error                          // repo -> error from ApprovePR
 
 	approveCalls []approveCall
+	checkRefs    []string // refs passed to ListCheckRuns, in call order
 }
 
 type approveCall struct {
 	Repo   string
 	Number int
+	SHA    string
 }
 
 func newFakeGH() *fakeGH {
@@ -50,6 +52,7 @@ func (f *fakeGH) ListCheckRuns(ctx context.Context, repo, ref string) ([]ghclien
 	if err := f.checksErr[repo]; err != nil {
 		return nil, err
 	}
+	f.checkRefs = append(f.checkRefs, ref)
 	return f.checkRuns[repo][ref], nil
 }
 
@@ -57,11 +60,11 @@ func (f *fakeGH) HasApproval(ctx context.Context, repo string, number int) (bool
 	return f.approved[repo][number], nil
 }
 
-func (f *fakeGH) ApprovePR(ctx context.Context, repo string, number int, body string) error {
+func (f *fakeGH) ApprovePR(ctx context.Context, repo string, number int, sha, body string) error {
 	if err := f.approveErr[repo]; err != nil {
 		return err
 	}
-	f.approveCalls = append(f.approveCalls, approveCall{Repo: repo, Number: number})
+	f.approveCalls = append(f.approveCalls, approveCall{Repo: repo, Number: number, SHA: sha})
 	return nil
 }
 
@@ -106,7 +109,7 @@ func TestRun_ApprovesEligiblePR(t *testing.T) {
 
 	res := Run(context.Background(), gh, cfg, now, false)
 
-	if len(gh.approveCalls) != 1 || gh.approveCalls[0] != (approveCall{Repo: "rancher/steve", Number: 1}) {
+	if len(gh.approveCalls) != 1 || gh.approveCalls[0] != (approveCall{Repo: "rancher/steve", Number: 1, SHA: pr.HeadSHA}) {
 		t.Fatalf("expected PR #1 to be approved, got calls %+v", gh.approveCalls)
 	}
 	approved := res.Approved()
@@ -286,6 +289,33 @@ func TestRun_OneRepoFailureDoesNotBlockOthers(t *testing.T) {
 	}
 	if len(gh.approveCalls) != 1 {
 		t.Fatalf("expected the healthy repo to still be swept, got %+v", gh.approveCalls)
+	}
+}
+
+// TestRun_PinsApprovalToReviewedSHA guards the TOCTOU gap: the review has to
+// name the same commit whose checks were inspected, so a Renovate force-push
+// landing mid-sweep can't inherit an approval it never earned.
+func TestRun_PinsApprovalToReviewedSHA(t *testing.T) {
+	now := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
+	gh := newFakeGH()
+	cfg := testConfig()
+	pr := basePR(1, now)
+	gh.prs["rancher/steve"] = []*ghclient.PR{pr}
+	gh.checkRuns["rancher/steve"] = map[string][]ghclient.CheckRun{pr.HeadSHA: greenRuns()}
+
+	Run(context.Background(), gh, cfg, now, false)
+
+	if len(gh.checkRefs) != 1 {
+		t.Fatalf("expected exactly one check-runs lookup, got %+v", gh.checkRefs)
+	}
+	if len(gh.approveCalls) != 1 {
+		t.Fatalf("expected exactly one approval, got %+v", gh.approveCalls)
+	}
+	if gh.approveCalls[0].SHA != gh.checkRefs[0] {
+		t.Errorf("approved SHA %q != reviewed SHA %q", gh.approveCalls[0].SHA, gh.checkRefs[0])
+	}
+	if gh.approveCalls[0].SHA != pr.HeadSHA {
+		t.Errorf("approved SHA = %q, want PR head %q", gh.approveCalls[0].SHA, pr.HeadSHA)
 	}
 }
 

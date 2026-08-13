@@ -17,7 +17,7 @@ type gitHubClient interface {
 	ListOpenPRs(ctx context.Context, repo string) ([]*ghclient.PR, error)
 	ListCheckRuns(ctx context.Context, repo, ref string) ([]ghclient.CheckRun, error)
 	HasApproval(ctx context.Context, repo string, number int) (bool, error)
-	ApprovePR(ctx context.Context, repo string, number int, body string) error
+	ApprovePR(ctx context.Context, repo string, number int, sha, body string) error
 }
 
 // approveBody is the review comment left on every PR the sweep approves.
@@ -91,7 +91,9 @@ func sweepRepo(ctx context.Context, gh gitHubClient, cfg *Config, repo string, n
 			out = append(out, Outcome{Repo: repo, Number: pr.Number, Title: pr.Title, Reason: reason})
 			continue
 		}
-		if err := gh.ApprovePR(ctx, repo, pr.Number, approveBody); err != nil {
+		// Pin the review to the head SHA whose checks we just read, so a
+		// force-push landing mid-sweep can't get approved unreviewed.
+		if err := gh.ApprovePR(ctx, repo, pr.Number, pr.HeadSHA, approveBody); err != nil {
 			log.Printf("renovate-approve: %s#%d: approve: %v", repo, pr.Number, err)
 			continue
 		}
