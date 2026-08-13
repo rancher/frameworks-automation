@@ -1,0 +1,41 @@
+# Policy + repo list for the Renovate auto-approve sweep (see
+# internal/renovateapprove and .github/workflows/renovate-approve.yaml).
+#
+# Mirrors the mechanism rancher/rancher already runs in its own repo-local
+# workflow (.github/workflows/auto-approve-bot-prs.yml): approve eligible
+# Renovate PRs with a dedicated GitHub App token so `required_approving_
+# review_count: 1` is satisfied without an org-level ruleset bypass actor.
+#
+# Deliberately NOT part of dependencies/*.yaml — this is a different concern
+# from the bump-PR DAG (LoadAll enforces exactly one leaf repo per config,
+# which doesn't fit a flat repo list) and its membership doesn't have to
+# track the DAG's (e.g. lasso isn't in any dependencies/*.yaml config, but
+# wants auto-approve). rancher/rancher and rancher/charts are intentionally
+# excluded: rancher/rancher already has its own copy of this mechanism, and
+# charts is out of scope for now.
+#
+# token-env values are exported by .github/actions/mint-tokens.
+
+author: renovate-rancher[bot]
+branch-prefix: renovate/
+min-working-days: 1
+
+repos:
+  - repo: rancher/apiserver
+    token-env: GH_TOKEN_APISERVER
+  - repo: rancher/dynamiclistener
+    token-env: GH_TOKEN_DYNAMICLISTENER
+  - repo: rancher/lasso
+    token-env: GH_TOKEN_LASSO
+  - repo: rancher/norman
+    token-env: GH_TOKEN_NORMAN
+  - repo: rancher/remotedialer
+    token-env: GH_TOKEN_REMOTEDIALER
+  - repo: rancher/remotedialer-proxy
+    token-env: GH_TOKEN_REMOTEDIALER_PROXY
+  - repo: rancher/steve
+    token-env: GH_TOKEN_STEVE
+  - repo: rancher/webhook
+    token-env: GH_TOKEN_WEBHOOK
+  - repo: rancher/wrangler
+    token-env: GH_TOKEN_WRANGLER

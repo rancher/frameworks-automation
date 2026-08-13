@@ -1,0 +1,54 @@
+name: Renovate Auto-Approve
+
+# Approves eligible open Renovate PRs (auto-merge already requested, old
+# enough, CI green) across every repo in renovateapprove.yaml, using each
+# repo's dedicated GitHub App token so `required_approving_review_count: 1`
+# is satisfied without an org-level ruleset bypass actor. See
+# internal/renovateapprove for the eligibility rules, and rancher/rancher's
+# own .github/workflows/auto-approve-bot-prs.yml for the mechanism this
+# mirrors.
+
+on:
+  schedule:
+    - cron: '30 7 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Ignore the min-working-days age gate
+        required: false
+        default: false
+        type: boolean
+
+permissions: {}
+
+# Independent of the reconciler lock — this touches PR reviews, not tracker
+# issues, so it can't race reconciler.yaml/cascade-*.yaml/bump-*.yaml.
+concurrency:
+  group: renovate-approve
+  cancel-in-progress: false
+
+jobs:
+  approve:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # rancher-eio/read-vault-secrets uses OIDC
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: 'go.mod'
+
+      - uses: ./.github/actions/mint-tokens
+
+      - name: Run renovate-approve sweep
+        # GH_TOKEN_* vars come from the mint-tokens step above, already in
+        # the job environment — same pattern as reconciler.yaml/bump-*.yaml.
+        env:
+          FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force || false }}
+        run: |
+          go run ./cmd/reconciler \
+            -mode=approve-renovate \
+            -approve-renovate-force="$FORCE"
