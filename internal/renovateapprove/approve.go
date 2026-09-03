@@ -21,7 +21,7 @@ type gitHubClient interface {
 }
 
 // approveBody is the review comment left on every PR the sweep approves.
-const approveBody = "Auto-approving Renovate PR with auto-merge enabled."
+const approveBody = "Auto-approving Renovate PR."
 
 // Outcome records what the sweep did (or didn't do) with one candidate PR.
 type Outcome struct {
@@ -112,9 +112,6 @@ func ineligibleReason(ctx context.Context, gh gitHubClient, cfg *Config, repo st
 	}
 	if !strings.HasPrefix(pr.HeadRef, cfg.BranchPrefix) {
 		return "head branch doesn't match " + cfg.BranchPrefix, nil
-	}
-	if !pr.AutoMerge {
-		return "auto-merge not requested", nil
 	}
 	if !force {
 		if days := workingDaysBetween(pr.CreatedAt, now); days < cfg.MinWorkingDays {
