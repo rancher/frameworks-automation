@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	gh "github.com/google/go-github/v66/github"
 	"golang.org/x/oauth2"
@@ -32,9 +33,9 @@ func IsNotFound(err error) bool {
 // access, used as a defensive fallback — every repo we actually write to
 // must have a token).
 type Client struct {
-	tokens     map[string]string  // owner/name → token
-	byToken    map[string]*gh.Client
-	unauthed   *gh.Client
+	tokens   map[string]string // owner/name → token
+	byToken  map[string]*gh.Client
+	unauthed *gh.Client
 }
 
 // NewClient builds a multi-client. tokens is keyed by GitHub owner/name; one
@@ -255,13 +256,17 @@ func (c *Client) CloseIssue(ctx context.Context, repo string, number int, commen
 }
 
 type PR struct {
-	Number  int
-	Title   string
-	State   string // "open" | "closed"
-	Merged  bool
-	HeadRef string
-	BaseRef string
-	URL     string // HTML URL
+	Number    int
+	Title     string
+	State     string // "open" | "closed"
+	Merged    bool
+	Author    string // login of the PR creator, e.g. "renovate-rancher[bot]"
+	HeadRef   string
+	HeadSHA   string
+	BaseRef   string
+	CreatedAt time.Time
+	AutoMerge bool   // true when auto-merge has been requested on this PR
+	URL       string // HTML URL
 }
 
 // GetPR fetches a single PR's current state. Used by pass 2 to poll
@@ -302,6 +307,117 @@ func (c *Client) ListOpenPRsByHead(ctx context.Context, repo, head string) ([]*P
 		out = append(out, toPR(p))
 	}
 	return out, nil
+}
+
+// ListOpenPRs returns every OPEN PR in `repo`, regardless of head. Paginates
+// through the full result set — used by the renovate-approve sweep, which
+// needs to see every open Renovate PR, not just the first page.
+func (c *Client) ListOpenPRs(ctx context.Context, repo string) ([]*PR, error) {
+	owner, name, err := splitRepo(repo)
+	if err != nil {
+		return nil, err
+	}
+	opt := &gh.PullRequestListOptions{
+		State:       "open",
+		ListOptions: gh.ListOptions{PerPage: 100},
+	}
+	var out []*PR
+	for {
+		prs, resp, err := c.clientFor(repo).PullRequests.List(ctx, owner, name, opt)
+		if err != nil {
+			return nil, fmt.Errorf("list open PRs %s: %w", repo, err)
+		}
+		for _, p := range prs {
+			out = append(out, toPR(p))
+		}
+		if resp.NextPage == 0 {
+			break
+		}
+		opt.Page = resp.NextPage
+	}
+	return out, nil
+}
+
+// CheckRun is the subset of a GitHub check run status relevant to gating
+// auto-approval: whether it finished, and how.
+type CheckRun struct {
+	Name       string
+	Status     string // "queued" | "in_progress" | "completed"
+	Conclusion string // "success" | "failure" | "neutral" | "cancelled" | "skipped" | "timed_out" | "action_required" | "stale" | ""
+}
+
+// ListCheckRuns returns every check run reported against `ref` (typically a
+// PR's head SHA) in `repo`.
+func (c *Client) ListCheckRuns(ctx context.Context, repo, ref string) ([]CheckRun, error) {
+	owner, name, err := splitRepo(repo)
+	if err != nil {
+		return nil, err
+	}
+	opt := &gh.ListCheckRunsOptions{ListOptions: gh.ListOptions{PerPage: 100}}
+	var out []CheckRun
+	for {
+		res, resp, err := c.clientFor(repo).Checks.ListCheckRunsForRef(ctx, owner, name, ref, opt)
+		if err != nil {
+			return nil, fmt.Errorf("list check runs %s@%s: %w", repo, ref, err)
+		}
+		for _, r := range res.CheckRuns {
+			out = append(out, CheckRun{
+				Name:       r.GetName(),
+				Status:     r.GetStatus(),
+				Conclusion: r.GetConclusion(),
+			})
+		}
+		if resp.NextPage == 0 {
+			break
+		}
+		opt.Page = resp.NextPage
+	}
+	return out, nil
+}
+
+// HasApproval reports whether any review on the PR is currently in the
+// APPROVED state — from any reviewer, human or bot. Used to make approval
+// idempotent: once anyone has approved, the auto-approve sweep leaves the PR
+// alone rather than piling on a second review every run.
+func (c *Client) HasApproval(ctx context.Context, repo string, number int) (bool, error) {
+	owner, name, err := splitRepo(repo)
+	if err != nil {
+		return false, err
+	}
+	reviews, _, err := c.clientFor(repo).PullRequests.ListReviews(ctx, owner, name, number, &gh.ListOptions{PerPage: 100})
+	if err != nil {
+		return false, fmt.Errorf("list reviews %s#%d: %w", repo, number, err)
+	}
+	for _, r := range reviews {
+		if r.GetState() == "APPROVED" {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// ApprovePR submits an APPROVE review on the PR, pinned to sha.
+//
+// Pinning matters: callers decide whether to approve by inspecting a specific
+// head commit (check runs, etc.), and Renovate force-pushes rebases
+// constantly. Without CommitID, GitHub attaches the review to whatever the
+// head is at submit time, which could be a commit nothing has validated.
+// With it, a review racing a force-push lands on the commit that was actually
+// reviewed — stale rather than wrong.
+func (c *Client) ApprovePR(ctx context.Context, repo string, number int, sha, body string) error {
+	owner, name, err := splitRepo(repo)
+	if err != nil {
+		return err
+	}
+	_, _, err = c.clientFor(repo).PullRequests.CreateReview(ctx, owner, name, number, &gh.PullRequestReviewRequest{
+		CommitID: &sha,
+		Event:    gh.String("APPROVE"),
+		Body:     &body,
+	})
+	if err != nil {
+		return fmt.Errorf("approve PR %s#%d: %w", repo, number, err)
+	}
+	return nil
 }
 
 func (c *Client) CreatePR(ctx context.Context, repo, title, body, head, base string) (*PR, error) {
@@ -394,12 +510,16 @@ func toIssue(i *gh.Issue) *Issue {
 
 func toPR(p *gh.PullRequest) *PR {
 	return &PR{
-		Number:  p.GetNumber(),
-		Title:   p.GetTitle(),
-		State:   p.GetState(),
-		Merged:  p.GetMerged(),
-		HeadRef: p.GetHead().GetRef(),
-		BaseRef: p.GetBase().GetRef(),
-		URL:     p.GetHTMLURL(),
+		Number:    p.GetNumber(),
+		Title:     p.GetTitle(),
+		State:     p.GetState(),
+		Merged:    p.GetMerged(),
+		Author:    p.GetUser().GetLogin(),
+		HeadRef:   p.GetHead().GetRef(),
+		HeadSHA:   p.GetHead().GetSHA(),
+		BaseRef:   p.GetBase().GetRef(),
+		CreatedAt: p.GetCreatedAt().Time,
+		AutoMerge: p.AutoMerge != nil,
+		URL:       p.GetHTMLURL(),
 	}
 }

@@ -26,6 +26,11 @@
 //	                0 on success, non-zero with the error otherwise. Used by
 //	                CI to guard edits to the configs. Talks to nothing
 //	                external — no env vars or GitHub credentials required.
+//	-mode=approve-renovate
+//	                Sweep every repo in the renovate-approve config (see
+//	                internal/renovateapprove), approving eligible open
+//	                Renovate PRs. Unrelated to the dependencies/*.yaml bump
+//	                DAG — doesn't touch tracker issues or AUTOMATION_REPO.
 package main
 
 import (
@@ -36,26 +41,38 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/rancher/release-automation/internal/config"
 	ghclient "github.com/rancher/release-automation/internal/github"
 	"github.com/rancher/release-automation/internal/reconcile"
+	"github.com/rancher/release-automation/internal/renovateapprove"
 )
 
 func main() {
 	var (
-		mode         = flag.String("mode", "cron", "cron|dispatch|bump-dep|cascade|validate-config")
-		configDir    = flag.String("config-dir", "dependencies", "directory containing the per-path *.yaml configs")
-		configName   = flag.String("config", "", "cascade|bump-dep mode: scope to one config (basename of dependencies/<name>.yaml). Required for cascade; optional for bump-dep (default: every config containing the dep).")
-		repo         = flag.String("repo", "", "dispatch mode: owner/name of repo that emitted the tag")
-		tag          = flag.String("tag", "", "dispatch mode: tag that was emitted (e.g. v0.7.5)")
-		sha          = flag.String("sha", "", "dispatch mode: commit SHA the tag points at")
-		dep          = flag.String("dep", "", "bump-dep mode: dep config key (e.g. wrangler)")
-		version      = flag.String("version", "", "bump-dep mode: version to bump (e.g. v0.5.1)")
-		leafBranch   = flag.String("leaf-branch", "", "bump-dep|cascade mode: leaf-repo branch the op targets (e.g. release/v2.13)")
-		independents = flag.String("independents", "", "cascade mode: comma-separated independent=version pairs (e.g. wrangler=v0.5.2,lasso=v1.0.0). Empty means no explicit independents — paired deps still get picked up at their latest tag.")
+		mode          = flag.String("mode", "cron", "cron|dispatch|bump-dep|cascade|validate-config|approve-renovate")
+		configDir     = flag.String("config-dir", "dependencies", "directory containing the per-path *.yaml configs")
+		approveConfig = flag.String("approve-renovate-config", "renovateapprove.yaml", "approve-renovate mode: path to the repo list/policy YAML")
+		approveForce  = flag.Bool("approve-renovate-force", false, "approve-renovate mode: skip the min-working-days age gate")
+		configName    = flag.String("config", "", "cascade|bump-dep mode: scope to one config (basename of dependencies/<name>.yaml). Required for cascade; optional for bump-dep (default: every config containing the dep).")
+		repo          = flag.String("repo", "", "dispatch mode: owner/name of repo that emitted the tag")
+		tag           = flag.String("tag", "", "dispatch mode: tag that was emitted (e.g. v0.7.5)")
+		sha           = flag.String("sha", "", "dispatch mode: commit SHA the tag points at")
+		dep           = flag.String("dep", "", "bump-dep mode: dep config key (e.g. wrangler)")
+		version       = flag.String("version", "", "bump-dep mode: version to bump (e.g. v0.5.1)")
+		leafBranch    = flag.String("leaf-branch", "", "bump-dep|cascade mode: leaf-repo branch the op targets (e.g. release/v2.13)")
+		independents  = flag.String("independents", "", "cascade mode: comma-separated independent=version pairs (e.g. wrangler=v0.5.2,lasso=v1.0.0). Empty means no explicit independents — paired deps still get picked up at their latest tag.")
 	)
 	flag.Parse()
+
+	// approve-renovate is unrelated to the dependencies/*.yaml bump DAG (no
+	// tracker issues, no AUTOMATION_REPO) — handle it before LoadAll/
+	// envSettings so it never depends on that config loading successfully.
+	if *mode == "approve-renovate" {
+		runApproveRenovate(context.Background(), *approveConfig, *approveForce)
+		return
+	}
 
 	cfgs, err := config.LoadAll(*configDir)
 	if err != nil {
@@ -68,6 +85,11 @@ func main() {
 		for _, name := range sortedNames(cfgs) {
 			fmt.Printf("config %s: %d repos\n", name, len(cfgs[name].Repos))
 		}
+		approveCfg, err := renovateapprove.Load(*approveConfig)
+		if err != nil {
+			log.Fatalf("load %s: %v", *approveConfig, err)
+		}
+		fmt.Printf("config %s: %d repos\n", *approveConfig, len(approveCfg.Repos))
 		return
 	}
 
@@ -207,6 +229,34 @@ func runBumpDep(ctx context.Context, cfgs map[string]*config.Config, reconcilers
 	}
 	if failures == len(targets) {
 		log.Fatalf("bump-dep: all %d configs failed", failures)
+	}
+}
+
+// runApproveRenovate loads the renovate-approve config, resolves its
+// per-repo tokens from the environment, and runs one sweep. Exits non-zero
+// if the config/tokens can't be loaded, or if any repo's sweep hit a GitHub
+// error (Result.Failed) — a clean sweep with zero eligible PRs is success.
+func runApproveRenovate(ctx context.Context, path string, force bool) {
+	cfg, err := renovateapprove.Load(path)
+	if err != nil {
+		log.Fatalf("approve-renovate: %v", err)
+	}
+	tokens, err := cfg.Tokens(os.Getenv)
+	if err != nil {
+		log.Fatalf("approve-renovate: %v", err)
+	}
+	gh := ghclient.NewClient(ctx, tokens)
+	res := renovateapprove.Run(ctx, gh, cfg, time.Now(), force)
+	for _, o := range res.Outcomes {
+		if o.Approved {
+			log.Printf("approve-renovate: approved %s#%d (%s)", o.Repo, o.Number, o.Title)
+		} else {
+			log.Printf("approve-renovate: skipped %s#%d: %s", o.Repo, o.Number, o.Reason)
+		}
+	}
+	log.Printf("approve-renovate: %d approved, %d skipped, %d repo failures", len(res.Approved()), len(res.Outcomes)-len(res.Approved()), res.Failed)
+	if res.Failed > 0 {
+		log.Fatalf("approve-renovate: %d repo(s) failed", res.Failed)
 	}
 }
 
