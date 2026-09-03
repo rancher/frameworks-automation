@@ -1,7 +1,8 @@
 name: Renovate Auto-Approve
 
-# Approves eligible open Renovate PRs (auto-merge already requested, old
-# enough, CI green) across every repo in renovateapprove.yaml, using each
+# Approves eligible open Renovate PRs (old enough, CI green — GitHub-native
+# auto-merge on the PR is not required) across every repo in
+# renovateapprove.yaml, using each
 # repo's dedicated GitHub App token so `required_approving_review_count: 1`
 # is satisfied without an org-level ruleset bypass actor. See
 # internal/renovateapprove for the eligibility rules, and rancher/rancher's
