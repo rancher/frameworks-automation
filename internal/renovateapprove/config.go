@@ -1,8 +1,9 @@
 // Package renovateapprove implements the Renovate auto-approve sweep: for
-// every configured repo, find open Renovate PRs that already have auto-merge
-// requested, are old enough, and have green CI, then approve them. Approval
-// satisfies each repo's `required_approving_review_count: 1` branch
-// protection rule without an org-level bypass actor — the same mechanism
+// every configured repo, find open Renovate PRs that are old enough and have
+// green CI, then approve them, regardless of whether GitHub-native auto-merge
+// has been requested on the PR (many repos in scope have "Allow auto-merge"
+// off). Approval satisfies each repo's `required_approving_review_count: 1`
+// branch protection rule without an org-level bypass actor — the same mechanism
 // rancher/rancher already uses in its own repo-local workflow.
 //
 // This is intentionally decoupled from the dependencies/*.yaml bump DAG

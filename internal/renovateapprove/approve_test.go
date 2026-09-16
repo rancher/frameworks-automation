@@ -85,8 +85,9 @@ func greenRuns() []ghclient.CheckRun {
 }
 
 // basePR returns an otherwise-eligible PR: right author, right branch
-// prefix, auto-merge requested, old enough (10 days), green checks waiting
-// to be wired up by the caller via fakeGH.
+// prefix, old enough (10 days), green checks waiting to be wired up by the
+// caller via fakeGH. AutoMerge is set true but is not required for
+// eligibility.
 func basePR(number int, now time.Time) *ghclient.PR {
 	return &ghclient.PR{
 		Number:    number,
@@ -154,18 +155,21 @@ func TestRun_SkipsNonRenovateBranch(t *testing.T) {
 	}
 }
 
-func TestRun_SkipsWithoutAutoMerge(t *testing.T) {
+func TestRun_ApprovesWithoutAutoMerge(t *testing.T) {
+	// Many repos in scope have "Allow auto-merge" off at the GitHub level,
+	// so Renovate never gets to request it. Approval must not depend on it.
 	now := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
 	gh := newFakeGH()
 	cfg := testConfig()
 	pr := basePR(1, now)
 	pr.AutoMerge = false
 	gh.prs["rancher/steve"] = []*ghclient.PR{pr}
+	gh.checkRuns["rancher/steve"] = map[string][]ghclient.CheckRun{pr.HeadSHA: greenRuns()}
 
 	Run(context.Background(), gh, cfg, now, false)
 
-	if len(gh.approveCalls) != 0 {
-		t.Fatalf("expected no approvals, got %+v", gh.approveCalls)
+	if len(gh.approveCalls) != 1 {
+		t.Fatalf("expected PR to be approved despite no auto-merge, got %+v", gh.approveCalls)
 	}
 }
 
