@@ -41,7 +41,6 @@ import (
 	"os"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/rancher/release-automation/internal/config"
 	ghclient "github.com/rancher/release-automation/internal/github"
@@ -54,7 +53,6 @@ func main() {
 		mode          = flag.String("mode", "cron", "cron|dispatch|bump-dep|cascade|validate-config|approve-renovate")
 		configDir     = flag.String("config-dir", "dependencies", "directory containing the per-path *.yaml configs")
 		approveConfig = flag.String("approve-renovate-config", "renovateapprove.yaml", "approve-renovate mode: path to the repo list/policy YAML")
-		approveForce  = flag.Bool("approve-renovate-force", false, "approve-renovate mode: skip the min-working-days age gate")
 		configName    = flag.String("config", "", "cascade|bump-dep mode: scope to one config (basename of dependencies/<name>.yaml). Required for cascade; optional for bump-dep (default: every config containing the dep).")
 		repo          = flag.String("repo", "", "dispatch mode: owner/name of repo that emitted the tag")
 		tag           = flag.String("tag", "", "dispatch mode: tag that was emitted (e.g. v0.7.5)")
@@ -70,7 +68,7 @@ func main() {
 	// tracker issues, no AUTOMATION_REPO) — handle it before LoadAll/
 	// envSettings so it never depends on that config loading successfully.
 	if *mode == "approve-renovate" {
-		runApproveRenovate(context.Background(), *approveConfig, *approveForce)
+		runApproveRenovate(context.Background(), *approveConfig)
 		return
 	}
 
@@ -236,7 +234,7 @@ func runBumpDep(ctx context.Context, cfgs map[string]*config.Config, reconcilers
 // per-repo tokens from the environment, and runs one sweep. Exits non-zero
 // if the config/tokens can't be loaded, or if any repo's sweep hit a GitHub
 // error (Result.Failed) — a clean sweep with zero eligible PRs is success.
-func runApproveRenovate(ctx context.Context, path string, force bool) {
+func runApproveRenovate(ctx context.Context, path string) {
 	cfg, err := renovateapprove.Load(path)
 	if err != nil {
 		log.Fatalf("approve-renovate: %v", err)
@@ -246,12 +244,18 @@ func runApproveRenovate(ctx context.Context, path string, force bool) {
 		log.Fatalf("approve-renovate: %v", err)
 	}
 	gh := ghclient.NewClient(ctx, tokens)
-	res := renovateapprove.Run(ctx, gh, cfg, time.Now(), force)
+	res := renovateapprove.Run(ctx, gh, cfg)
 	for _, o := range res.Outcomes {
 		if o.Approved {
 			log.Printf("approve-renovate: approved %s#%d (%s)", o.Repo, o.Number, o.Title)
 		} else {
 			log.Printf("approve-renovate: skipped %s#%d: %s", o.Repo, o.Number, o.Reason)
+		}
+		if o.AutoMergeEnabled {
+			log.Printf("approve-renovate: enabled auto-merge on %s#%d", o.Repo, o.Number)
+		}
+		if o.Merged {
+			log.Printf("approve-renovate: merged %s#%d", o.Repo, o.Number)
 		}
 	}
 	log.Printf("approve-renovate: %d approved, %d skipped, %d repo failures", len(res.Approved()), len(res.Outcomes)-len(res.Approved()), res.Failed)

@@ -1,5 +1,5 @@
 // Package renovateapprove implements the Renovate auto-approve sweep: for
-// every configured repo, find open Renovate PRs that are old enough and have
+// every configured repo, find open Renovate PRs with
 // green CI, then approve them, regardless of whether GitHub-native auto-merge
 // has been requested on the PR (many repos in scope have "Allow auto-merge"
 // off). Approval satisfies each repo's `required_approving_review_count: 1`
@@ -33,6 +33,29 @@ type RepoConfig struct {
 	// GitHub token used to approve PRs in this repo. Same Vault-backed
 	// convention as config.Repo.TokenEnv (see mint-tokens).
 	TokenEnv string `yaml:"token-env"`
+	// ExtraSources lists additional author/branch-prefix pairs eligible for
+	// auto-approve in this repo only, beyond the global Author/BranchPrefix
+	// (e.g. webhook's own dependency-sync bot).
+	ExtraSources []Source `yaml:"extra-sources,omitempty"`
+}
+
+// Source identifies a class of PRs by author login and head branch prefix.
+// Both must match, as defense in depth.
+type Source struct {
+	Author       string `yaml:"author"`
+	BranchPrefix string `yaml:"branch-prefix"`
+	// AutoMerge makes the sweep also enable GitHub-native auto-merge on
+	// matching PRs once approved. The repo must allow auto-merge.
+	AutoMerge bool `yaml:"auto-merge,omitempty"`
+	// MergeMethod is MERGE, SQUASH or REBASE. Defaults to SQUASH.
+	MergeMethod string `yaml:"merge-method,omitempty"`
+}
+
+func (s Source) mergeMethod() string {
+	if s.MergeMethod == "" {
+		return "SQUASH"
+	}
+	return s.MergeMethod
 }
 
 // Config is the top-level renovate-approve policy + repo list.
@@ -45,9 +68,6 @@ type Config struct {
 	// BranchPrefix filters candidate PRs by head branch, as defense in
 	// depth alongside the author check. Defaults to "renovate/".
 	BranchPrefix string `yaml:"branch-prefix,omitempty"`
-	// MinWorkingDays is the soak time (Mon-Fri, UTC) a PR must sit open
-	// before it's eligible for auto-approve. Defaults to 1.
-	MinWorkingDays int `yaml:"min-working-days,omitempty"`
 
 	Repos []RepoConfig `yaml:"repos"`
 }
@@ -77,17 +97,11 @@ func (c *Config) applyDefaults() {
 	if c.BranchPrefix == "" {
 		c.BranchPrefix = "renovate/"
 	}
-	if c.MinWorkingDays == 0 {
-		c.MinWorkingDays = 1
-	}
 }
 
 func (c *Config) validate() error {
 	if len(c.Repos) == 0 {
 		return fmt.Errorf("repos is required and must be non-empty")
-	}
-	if c.MinWorkingDays < 0 {
-		return fmt.Errorf("min-working-days must be >= 0, got %d", c.MinWorkingDays)
 	}
 	seen := make(map[string]bool, len(c.Repos))
 	for i, r := range c.Repos {
@@ -101,6 +115,16 @@ func (c *Config) validate() error {
 			return fmt.Errorf("repos[%d]: repo %q listed twice", i, r.Repo)
 		}
 		seen[r.Repo] = true
+		for j, src := range r.ExtraSources {
+			if src.Author == "" || src.BranchPrefix == "" {
+				return fmt.Errorf("repos[%d] (%s): extra-sources[%d]: author and branch-prefix are required", i, r.Repo, j)
+			}
+			switch src.MergeMethod {
+			case "", "MERGE", "SQUASH", "REBASE":
+			default:
+				return fmt.Errorf("repos[%d] (%s): extra-sources[%d]: merge-method %q must be MERGE, SQUASH or REBASE", i, r.Repo, j, src.MergeMethod)
+			}
+		}
 		if r.TokenEnv == "" {
 			return fmt.Errorf("repos[%d] (%s): token-env is required", i, r.Repo)
 		}

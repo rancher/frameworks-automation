@@ -18,7 +18,6 @@
 
 author: renovate-rancher[bot]
 branch-prefix: renovate/
-min-working-days: 1
 
 repos:
   - repo: rancher/apiserver
@@ -37,5 +36,11 @@ repos:
     token-env: GH_TOKEN_STEVE
   - repo: rancher/webhook
     token-env: GH_TOKEN_WEBHOOK
+    # Webhook's own "Sync webhook dependencies" bump PRs: auto-merge is
+    # turned on once approved.
+    extra-sources:
+      - author: rancher-pr-and-push-webhook[bot]
+        branch-prefix: automation/sync-deps-
+        auto-merge: true
   - repo: rancher/wrangler
     token-env: GH_TOKEN_WRANGLER
