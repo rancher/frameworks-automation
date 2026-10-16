@@ -345,3 +345,67 @@ func TestWorkingDaysBetween(t *testing.T) {
 		})
 	}
 }
+
+func extraSourceConfig() *Config {
+	c := &Config{
+		Repos: []RepoConfig{{
+			Repo:     "rancher/webhook",
+			TokenEnv: "GH_TOKEN_WEBHOOK",
+			ExtraSources: []Source{{
+				Author:       "rancher-pr-and-push-webhook[bot]",
+				BranchPrefix: "automation/sync-deps-",
+			}},
+		}},
+	}
+	c.applyDefaults()
+	return c
+}
+
+func TestRun_ApprovesExtraSource(t *testing.T) {
+	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	gh := newFakeGH()
+	pr := basePR(1979, now)
+	pr.Author = "rancher-pr-and-push-webhook[bot]"
+	pr.HeadRef = "automation/sync-deps-main"
+	gh.prs["rancher/webhook"] = []*ghclient.PR{pr}
+	gh.checkRuns["rancher/webhook"] = map[string][]ghclient.CheckRun{pr.HeadSHA: greenRuns()}
+
+	Run(context.Background(), gh, extraSourceConfig(), now, false)
+	if len(gh.approveCalls) != 1 {
+		t.Fatalf("approveCalls = %d, want 1", len(gh.approveCalls))
+	}
+}
+
+func TestRun_ExtraSourceRequiresBothAuthorAndBranch(t *testing.T) {
+	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	gh := newFakeGH()
+	wrongBranch := basePR(1, now)
+	wrongBranch.Author = "rancher-pr-and-push-webhook[bot]"
+	wrongAuthor := basePR(2, now)
+	wrongAuthor.HeadRef = "automation/sync-deps-main"
+	wrongAuthor.Author = "some-human"
+	gh.prs["rancher/webhook"] = []*ghclient.PR{wrongBranch, wrongAuthor}
+	gh.checkRuns["rancher/webhook"] = map[string][]ghclient.CheckRun{
+		wrongBranch.HeadSHA: greenRuns(), wrongAuthor.HeadSHA: greenRuns(),
+	}
+
+	Run(context.Background(), gh, extraSourceConfig(), now, false)
+	if len(gh.approveCalls) != 0 {
+		t.Fatalf("approveCalls = %d, want 0", len(gh.approveCalls))
+	}
+}
+
+func TestRun_ExtraSourceScopedToItsRepo(t *testing.T) {
+	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	gh := newFakeGH()
+	pr := basePR(5, now)
+	pr.Author = "rancher-pr-and-push-webhook[bot]"
+	pr.HeadRef = "automation/sync-deps-main"
+	gh.prs["rancher/steve"] = []*ghclient.PR{pr}
+	gh.checkRuns["rancher/steve"] = map[string][]ghclient.CheckRun{pr.HeadSHA: greenRuns()}
+
+	Run(context.Background(), gh, testConfig(), now, false)
+	if len(gh.approveCalls) != 0 {
+		t.Fatalf("approveCalls = %d, want 0", len(gh.approveCalls))
+	}
+}

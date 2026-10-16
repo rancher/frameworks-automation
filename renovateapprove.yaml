@@ -37,5 +37,9 @@ repos:
     token-env: GH_TOKEN_STEVE
   - repo: rancher/webhook
     token-env: GH_TOKEN_WEBHOOK
+    # Webhook's own "Sync webhook dependencies" bump PRs.
+    extra-sources:
+      - author: rancher-pr-and-push-webhook[bot]
+        branch-prefix: automation/sync-deps-
   - repo: rancher/wrangler
     token-env: GH_TOKEN_WRANGLER

@@ -33,6 +33,17 @@ type RepoConfig struct {
 	// GitHub token used to approve PRs in this repo. Same Vault-backed
 	// convention as config.Repo.TokenEnv (see mint-tokens).
 	TokenEnv string `yaml:"token-env"`
+	// ExtraSources lists additional author/branch-prefix pairs eligible for
+	// auto-approve in this repo only, beyond the global Author/BranchPrefix
+	// (e.g. webhook's own dependency-sync bot).
+	ExtraSources []Source `yaml:"extra-sources,omitempty"`
+}
+
+// Source identifies a class of PRs by author login and head branch prefix.
+// Both must match, as defense in depth.
+type Source struct {
+	Author       string `yaml:"author"`
+	BranchPrefix string `yaml:"branch-prefix"`
 }
 
 // Config is the top-level renovate-approve policy + repo list.
@@ -101,6 +112,11 @@ func (c *Config) validate() error {
 			return fmt.Errorf("repos[%d]: repo %q listed twice", i, r.Repo)
 		}
 		seen[r.Repo] = true
+		for j, src := range r.ExtraSources {
+			if src.Author == "" || src.BranchPrefix == "" {
+				return fmt.Errorf("repos[%d] (%s): extra-sources[%d]: author and branch-prefix are required", i, r.Repo, j)
+			}
+		}
 		if r.TokenEnv == "" {
 			return fmt.Errorf("repos[%d] (%s): token-env is required", i, r.Repo)
 		}

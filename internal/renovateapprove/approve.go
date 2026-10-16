@@ -63,7 +63,7 @@ func (r Result) Approved() []Outcome {
 func Run(ctx context.Context, gh gitHubClient, cfg *Config, now time.Time, force bool) Result {
 	var res Result
 	for _, r := range cfg.Repos {
-		outcomes, err := sweepRepo(ctx, gh, cfg, r.Repo, now, force)
+		outcomes, err := sweepRepo(ctx, gh, cfg, r, now, force)
 		if err != nil {
 			log.Printf("renovate-approve: %s: %v", r.Repo, err)
 			res.Failed++
@@ -74,7 +74,8 @@ func Run(ctx context.Context, gh gitHubClient, cfg *Config, now time.Time, force
 	return res
 }
 
-func sweepRepo(ctx context.Context, gh gitHubClient, cfg *Config, repo string, now time.Time, force bool) ([]Outcome, error) {
+func sweepRepo(ctx context.Context, gh gitHubClient, cfg *Config, rc RepoConfig, now time.Time, force bool) ([]Outcome, error) {
+	repo := rc.Repo
 	prs, err := gh.ListOpenPRs(ctx, repo)
 	if err != nil {
 		return nil, fmt.Errorf("list open PRs: %w", err)
@@ -82,7 +83,7 @@ func sweepRepo(ctx context.Context, gh gitHubClient, cfg *Config, repo string, n
 
 	var out []Outcome
 	for _, pr := range prs {
-		reason, err := ineligibleReason(ctx, gh, cfg, repo, pr, now, force)
+		reason, err := ineligibleReason(ctx, gh, cfg, rc, pr, now, force)
 		if err != nil {
 			log.Printf("renovate-approve: %s#%d: %v", repo, pr.Number, err)
 			continue
@@ -106,12 +107,10 @@ func sweepRepo(ctx context.Context, gh gitHubClient, cfg *Config, repo string, n
 // alone, or "" when it should be approved. The only error return is a
 // GitHub-call failure (checks/reviews lookups) — callers should log and skip
 // rather than treat it as a definitive ineligibility.
-func ineligibleReason(ctx context.Context, gh gitHubClient, cfg *Config, repo string, pr *ghclient.PR, now time.Time, force bool) (string, error) {
-	if pr.Author != cfg.Author {
-		return "not authored by " + cfg.Author, nil
-	}
-	if !strings.HasPrefix(pr.HeadRef, cfg.BranchPrefix) {
-		return "head branch doesn't match " + cfg.BranchPrefix, nil
+func ineligibleReason(ctx context.Context, gh gitHubClient, cfg *Config, rc RepoConfig, pr *ghclient.PR, now time.Time, force bool) (string, error) {
+	repo := rc.Repo
+	if reason := sourceMismatch(cfg, rc, pr); reason != "" {
+		return reason, nil
 	}
 	if !force {
 		if days := workingDaysBetween(pr.CreatedAt, now); days < cfg.MinWorkingDays {
@@ -133,6 +132,21 @@ func ineligibleReason(ctx context.Context, gh gitHubClient, cfg *Config, repo st
 		return "checks not all green", nil
 	}
 	return "", nil
+}
+
+// sourceMismatch returns "" when pr matches the global Renovate source or any
+// of the repo's extra sources, else the reason for the global source's miss.
+func sourceMismatch(cfg *Config, rc RepoConfig, pr *ghclient.PR) string {
+	sources := append([]Source{{Author: cfg.Author, BranchPrefix: cfg.BranchPrefix}}, rc.ExtraSources...)
+	for _, s := range sources {
+		if pr.Author == s.Author && strings.HasPrefix(pr.HeadRef, s.BranchPrefix) {
+			return ""
+		}
+	}
+	if pr.Author != cfg.Author {
+		return "not authored by " + cfg.Author
+	}
+	return "head branch doesn't match " + cfg.BranchPrefix
 }
 
 // allChecksGreen requires at least one check run (an unstarted CI run isn't
