@@ -31,9 +31,6 @@ repos:
 	if cfg.BranchPrefix != "renovate/" {
 		t.Errorf("BranchPrefix default = %q", cfg.BranchPrefix)
 	}
-	if cfg.MinWorkingDays != 1 {
-		t.Errorf("MinWorkingDays default = %d", cfg.MinWorkingDays)
-	}
 }
 
 func TestLoad_RejectsMissingRepos(t *testing.T) {

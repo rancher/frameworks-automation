@@ -105,7 +105,7 @@ func greenRuns() []ghclient.CheckRun {
 }
 
 // basePR returns an otherwise-eligible PR: right author, right branch
-// prefix, old enough (10 days), green checks waiting to be wired up by the
+// prefix, green checks waiting to be wired up by the
 // caller via fakeGH. AutoMerge is set true but is not required for
 // eligibility.
 func basePR(number int, now time.Time) *ghclient.PR {
@@ -128,7 +128,7 @@ func TestRun_ApprovesEligiblePR(t *testing.T) {
 	gh.prs["rancher/steve"] = []*ghclient.PR{pr}
 	gh.checkRuns["rancher/steve"] = map[string][]ghclient.CheckRun{pr.HeadSHA: greenRuns()}
 
-	res := Run(context.Background(), gh, cfg, now, false)
+	res := Run(context.Background(), gh, cfg)
 
 	if len(gh.approveCalls) != 1 || gh.approveCalls[0] != (approveCall{Repo: "rancher/steve", Number: 1, SHA: pr.HeadSHA}) {
 		t.Fatalf("expected PR #1 to be approved, got calls %+v", gh.approveCalls)
@@ -150,7 +150,7 @@ func TestRun_SkipsWrongAuthor(t *testing.T) {
 	pr.Author = "some-human"
 	gh.prs["rancher/steve"] = []*ghclient.PR{pr}
 
-	res := Run(context.Background(), gh, cfg, now, false)
+	res := Run(context.Background(), gh, cfg)
 
 	if len(gh.approveCalls) != 0 {
 		t.Fatalf("expected no approvals, got %+v", gh.approveCalls)
@@ -168,7 +168,7 @@ func TestRun_SkipsNonRenovateBranch(t *testing.T) {
 	pr.HeadRef = "some-feature-branch"
 	gh.prs["rancher/steve"] = []*ghclient.PR{pr}
 
-	Run(context.Background(), gh, cfg, now, false)
+	Run(context.Background(), gh, cfg)
 
 	if len(gh.approveCalls) != 0 {
 		t.Fatalf("expected no approvals, got %+v", gh.approveCalls)
@@ -186,44 +186,11 @@ func TestRun_ApprovesWithoutAutoMerge(t *testing.T) {
 	gh.prs["rancher/steve"] = []*ghclient.PR{pr}
 	gh.checkRuns["rancher/steve"] = map[string][]ghclient.CheckRun{pr.HeadSHA: greenRuns()}
 
-	Run(context.Background(), gh, cfg, now, false)
+	Run(context.Background(), gh, cfg)
 
 	if len(gh.approveCalls) != 1 {
 		t.Fatalf("expected PR to be approved despite no auto-merge, got %+v", gh.approveCalls)
 	}
-}
-
-func TestRun_SkipsTooNew(t *testing.T) {
-	now := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC) // Thursday
-	gh := newFakeGH()
-	cfg := testConfig()
-	pr := basePR(1, now)
-	pr.CreatedAt = now // opened today: zero working days old
-	gh.prs["rancher/steve"] = []*ghclient.PR{pr}
-	gh.checkRuns["rancher/steve"] = map[string][]ghclient.CheckRun{pr.HeadSHA: greenRuns()}
-
-	Run(context.Background(), gh, cfg, now, false)
-
-	if len(gh.approveCalls) != 0 {
-		t.Fatalf("expected no approvals for a same-day PR, got %+v", gh.approveCalls)
-	}
-}
-
-func TestRun_ForceSkipsAgeGate(t *testing.T) {
-	now := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
-	gh := newFakeGH()
-	cfg := testConfig()
-	pr := basePR(1, now)
-	pr.CreatedAt = now // opened today
-	gh.prs["rancher/steve"] = []*ghclient.PR{pr}
-	gh.checkRuns["rancher/steve"] = map[string][]ghclient.CheckRun{pr.HeadSHA: greenRuns()}
-
-	res := Run(context.Background(), gh, cfg, now, true /* force */)
-
-	if len(gh.approveCalls) != 1 {
-		t.Fatalf("expected force to bypass the age gate, got calls %+v", gh.approveCalls)
-	}
-	_ = res
 }
 
 func TestRun_SkipsWhenChecksNotGreen(t *testing.T) {
@@ -236,7 +203,7 @@ func TestRun_SkipsWhenChecksNotGreen(t *testing.T) {
 		pr.HeadSHA: {{Name: "ci", Status: "completed", Conclusion: "failure"}},
 	}
 
-	Run(context.Background(), gh, cfg, now, false)
+	Run(context.Background(), gh, cfg)
 
 	if len(gh.approveCalls) != 0 {
 		t.Fatalf("expected no approvals with failing checks, got %+v", gh.approveCalls)
@@ -253,7 +220,7 @@ func TestRun_SkipsWhenChecksPending(t *testing.T) {
 		pr.HeadSHA: {{Name: "ci", Status: "in_progress", Conclusion: ""}},
 	}
 
-	Run(context.Background(), gh, cfg, now, false)
+	Run(context.Background(), gh, cfg)
 
 	if len(gh.approveCalls) != 0 {
 		t.Fatalf("expected no approvals while checks are still running, got %+v", gh.approveCalls)
@@ -268,7 +235,7 @@ func TestRun_SkipsWhenNoChecksAtAll(t *testing.T) {
 	gh.prs["rancher/steve"] = []*ghclient.PR{pr}
 	// No entry in gh.checkRuns at all — zero check runs reported.
 
-	Run(context.Background(), gh, cfg, now, false)
+	Run(context.Background(), gh, cfg)
 
 	if len(gh.approveCalls) != 0 {
 		t.Fatalf("expected no approvals with zero check runs, got %+v", gh.approveCalls)
@@ -284,7 +251,7 @@ func TestRun_SkipsAlreadyApproved(t *testing.T) {
 	gh.checkRuns["rancher/steve"] = map[string][]ghclient.CheckRun{pr.HeadSHA: greenRuns()}
 	gh.approved["rancher/steve"] = map[int]bool{1: true}
 
-	Run(context.Background(), gh, cfg, now, false)
+	Run(context.Background(), gh, cfg)
 
 	if len(gh.approveCalls) != 0 {
 		t.Fatalf("expected no duplicate approval, got %+v", gh.approveCalls)
@@ -306,7 +273,7 @@ func TestRun_OneRepoFailureDoesNotBlockOthers(t *testing.T) {
 	gh.prs["rancher/steve"] = []*ghclient.PR{pr}
 	gh.checkRuns["rancher/steve"] = map[string][]ghclient.CheckRun{pr.HeadSHA: greenRuns()}
 
-	res := Run(context.Background(), gh, cfg, now, false)
+	res := Run(context.Background(), gh, cfg)
 
 	if res.Failed != 1 {
 		t.Fatalf("expected exactly one repo failure, got %d", res.Failed)
@@ -327,7 +294,7 @@ func TestRun_PinsApprovalToReviewedSHA(t *testing.T) {
 	gh.prs["rancher/steve"] = []*ghclient.PR{pr}
 	gh.checkRuns["rancher/steve"] = map[string][]ghclient.CheckRun{pr.HeadSHA: greenRuns()}
 
-	Run(context.Background(), gh, cfg, now, false)
+	Run(context.Background(), gh, cfg)
 
 	if len(gh.checkRefs) != 1 {
 		t.Fatalf("expected exactly one check-runs lookup, got %+v", gh.checkRefs)
@@ -340,29 +307,6 @@ func TestRun_PinsApprovalToReviewedSHA(t *testing.T) {
 	}
 	if gh.approveCalls[0].SHA != pr.HeadSHA {
 		t.Errorf("approved SHA = %q, want PR head %q", gh.approveCalls[0].SHA, pr.HeadSHA)
-	}
-}
-
-func TestWorkingDaysBetween(t *testing.T) {
-	// Thursday 2026-08-13.
-	now := time.Date(2026, 8, 13, 15, 0, 0, 0, time.UTC)
-	tests := []struct {
-		name    string
-		created time.Time
-		want    int
-	}{
-		{"same day", now, 0},
-		{"yesterday (Wed)", now.AddDate(0, 0, -1), 1},
-		{"Monday this week", time.Date(2026, 8, 10, 9, 0, 0, 0, time.UTC), 3}, // Mon, Tue, Wed
-		{"over the weekend", time.Date(2026, 8, 7, 9, 0, 0, 0, time.UTC), 4},  // Fri..Wed weekdays, weekend excluded
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := workingDaysBetween(tt.created, now)
-			if got != tt.want {
-				t.Errorf("workingDaysBetween(%s, %s) = %d, want %d", tt.created, now, got, tt.want)
-			}
-		})
 	}
 }
 
@@ -391,7 +335,7 @@ func TestRun_ApprovesExtraSource(t *testing.T) {
 	gh.prs["rancher/webhook"] = []*ghclient.PR{pr}
 	gh.checkRuns["rancher/webhook"] = map[string][]ghclient.CheckRun{pr.HeadSHA: greenRuns()}
 
-	Run(context.Background(), gh, extraSourceConfig(), now, false)
+	Run(context.Background(), gh, extraSourceConfig())
 	if len(gh.approveCalls) != 1 {
 		t.Fatalf("approveCalls = %d, want 1", len(gh.approveCalls))
 	}
@@ -410,7 +354,7 @@ func TestRun_ExtraSourceRequiresBothAuthorAndBranch(t *testing.T) {
 		wrongBranch.HeadSHA: greenRuns(), wrongAuthor.HeadSHA: greenRuns(),
 	}
 
-	Run(context.Background(), gh, extraSourceConfig(), now, false)
+	Run(context.Background(), gh, extraSourceConfig())
 	if len(gh.approveCalls) != 0 {
 		t.Fatalf("approveCalls = %d, want 0", len(gh.approveCalls))
 	}
@@ -425,13 +369,13 @@ func TestRun_ExtraSourceScopedToItsRepo(t *testing.T) {
 	gh.prs["rancher/steve"] = []*ghclient.PR{pr}
 	gh.checkRuns["rancher/steve"] = map[string][]ghclient.CheckRun{pr.HeadSHA: greenRuns()}
 
-	Run(context.Background(), gh, testConfig(), now, false)
+	Run(context.Background(), gh, testConfig())
 	if len(gh.approveCalls) != 0 {
 		t.Fatalf("approveCalls = %d, want 0", len(gh.approveCalls))
 	}
 }
 
-func TestRun_ExtraSourceNoSoakByDefault(t *testing.T) {
+func TestRun_ExtraSourceApprovesFreshPR(t *testing.T) {
 	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
 	gh := newFakeGH()
 	pr := basePR(1979, now)
@@ -441,27 +385,9 @@ func TestRun_ExtraSourceNoSoakByDefault(t *testing.T) {
 	gh.prs["rancher/webhook"] = []*ghclient.PR{pr}
 	gh.checkRuns["rancher/webhook"] = map[string][]ghclient.CheckRun{pr.HeadSHA: greenRuns()}
 
-	Run(context.Background(), gh, extraSourceConfig(), now, false)
+	Run(context.Background(), gh, extraSourceConfig())
 	if len(gh.approveCalls) != 1 {
 		t.Fatalf("approveCalls = %d, want 1", len(gh.approveCalls))
-	}
-}
-
-func TestRun_ExtraSourceHonorsMinWorkingDays(t *testing.T) {
-	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
-	gh := newFakeGH()
-	cfg := extraSourceConfig()
-	cfg.Repos[0].ExtraSources[0].MinWorkingDays = 1
-	pr := basePR(1979, now)
-	pr.Author = "rancher-pr-and-push-webhook[bot]"
-	pr.HeadRef = "automation/sync-deps-main"
-	pr.CreatedAt = now.Add(-time.Hour)
-	gh.prs["rancher/webhook"] = []*ghclient.PR{pr}
-	gh.checkRuns["rancher/webhook"] = map[string][]ghclient.CheckRun{pr.HeadSHA: greenRuns()}
-
-	Run(context.Background(), gh, cfg, now, false)
-	if len(gh.approveCalls) != 0 {
-		t.Fatalf("approveCalls = %d, want 0", len(gh.approveCalls))
 	}
 }
 
@@ -481,7 +407,7 @@ func TestRun_EnablesAutoMergeAfterApprove(t *testing.T) {
 	gh.prs["rancher/webhook"] = []*ghclient.PR{pr}
 	gh.checkRuns["rancher/webhook"] = map[string][]ghclient.CheckRun{pr.HeadSHA: greenRuns()}
 
-	res := Run(context.Background(), gh, extraSourceConfig(), now, false)
+	res := Run(context.Background(), gh, extraSourceConfig())
 	if len(gh.autoMerges) != 1 || gh.autoMerges[0] != "rancher/webhook/PR_node/SQUASH" {
 		t.Fatalf("autoMerges = %v", gh.autoMerges)
 	}
@@ -501,7 +427,7 @@ func TestRun_MergesDirectlyWhenPRAlreadyClean(t *testing.T) {
 	gh.prs["rancher/webhook"] = []*ghclient.PR{pr}
 	gh.checkRuns["rancher/webhook"] = map[string][]ghclient.CheckRun{pr.HeadSHA: greenRuns()}
 
-	res := Run(context.Background(), gh, extraSourceConfig(), now, false)
+	res := Run(context.Background(), gh, extraSourceConfig())
 	if len(gh.merges) != 1 || gh.merges[0] != "rancher/webhook#1979@sha-1979/SQUASH" {
 		t.Fatalf("merges = %v", gh.merges)
 	}
@@ -520,7 +446,7 @@ func TestRun_EnablesAutoMergeWhenAlreadyApproved(t *testing.T) {
 	gh.prs["rancher/webhook"] = []*ghclient.PR{pr}
 	gh.approved["rancher/webhook"] = map[int]bool{pr.Number: true}
 
-	Run(context.Background(), gh, extraSourceConfig(), now, false)
+	Run(context.Background(), gh, extraSourceConfig())
 	if len(gh.approveCalls) != 0 || len(gh.autoMerges) != 1 {
 		t.Fatalf("approves=%d autoMerges=%v", len(gh.approveCalls), gh.autoMerges)
 	}
@@ -539,7 +465,7 @@ func TestRun_SkipsAutoMergeWhenAlreadyEnabledOrChecksRed(t *testing.T) {
 		red.HeadSHA:     {{Name: "ci", Status: "completed", Conclusion: "failure"}},
 	}
 
-	Run(context.Background(), gh, extraSourceConfig(), now, false)
+	Run(context.Background(), gh, extraSourceConfig())
 	if len(gh.autoMerges) != 0 {
 		t.Fatalf("autoMerges = %v, want none", gh.autoMerges)
 	}

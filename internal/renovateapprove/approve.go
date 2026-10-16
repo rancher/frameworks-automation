@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"strings"
-	"time"
 
 	ghclient "github.com/rancher/release-automation/internal/github"
 )
@@ -65,13 +64,10 @@ func (r Result) Approved() []Outcome {
 // over the rest rather than aborting — mirrors the reconcile package's
 // continue-on-error cron style, so one flaky repo never blocks approval
 // everywhere else.
-//
-// force, when true, skips the MinWorkingDays age gate (mirrors the
-// rancher/rancher workflow's manual workflow_dispatch force input).
-func Run(ctx context.Context, gh gitHubClient, cfg *Config, now time.Time, force bool) Result {
+func Run(ctx context.Context, gh gitHubClient, cfg *Config) Result {
 	var res Result
 	for _, r := range cfg.Repos {
-		outcomes, err := sweepRepo(ctx, gh, cfg, r, now, force)
+		outcomes, err := sweepRepo(ctx, gh, cfg, r)
 		if err != nil {
 			log.Printf("renovate-approve: %s: %v", r.Repo, err)
 			res.Failed++
@@ -82,7 +78,7 @@ func Run(ctx context.Context, gh gitHubClient, cfg *Config, now time.Time, force
 	return res
 }
 
-func sweepRepo(ctx context.Context, gh gitHubClient, cfg *Config, rc RepoConfig, now time.Time, force bool) ([]Outcome, error) {
+func sweepRepo(ctx context.Context, gh gitHubClient, cfg *Config, rc RepoConfig) ([]Outcome, error) {
 	repo := rc.Repo
 	prs, err := gh.ListOpenPRs(ctx, repo)
 	if err != nil {
@@ -91,7 +87,7 @@ func sweepRepo(ctx context.Context, gh gitHubClient, cfg *Config, rc RepoConfig,
 
 	var out []Outcome
 	for _, pr := range prs {
-		src, reason, err := ineligibleReason(ctx, gh, cfg, rc, pr, now, force)
+		src, reason, err := ineligibleReason(ctx, gh, cfg, rc, pr)
 		if err != nil {
 			log.Printf("renovate-approve: %s#%d: %v", repo, pr.Number, err)
 			continue
@@ -142,16 +138,11 @@ const reasonAlreadyApproved = "already approved"
 // whenever the PR matched one, even if it was otherwise ineligible. The only
 // error return is a GitHub-call failure (checks/reviews lookups) — callers
 // should log and skip rather than treat it as a definitive ineligibility.
-func ineligibleReason(ctx context.Context, gh gitHubClient, cfg *Config, rc RepoConfig, pr *ghclient.PR, now time.Time, force bool) (Source, string, error) {
+func ineligibleReason(ctx context.Context, gh gitHubClient, cfg *Config, rc RepoConfig, pr *ghclient.PR) (Source, string, error) {
 	repo := rc.Repo
 	src, reason := matchSource(cfg, rc, pr)
 	if reason != "" {
 		return src, reason, nil
-	}
-	if !force {
-		if days := workingDaysBetween(pr.CreatedAt, now); days < src.MinWorkingDays {
-			return src, fmt.Sprintf("too new (%d working day(s) old, need %d)", days, src.MinWorkingDays), nil
-		}
 	}
 	approved, err := gh.HasApproval(ctx, repo, pr.Number)
 	if err != nil {
@@ -174,7 +165,7 @@ func ineligibleReason(ctx context.Context, gh gitHubClient, cfg *Config, rc Repo
 // one of the repo's extra sources. When none match, the reason is that of
 // the global source's miss.
 func matchSource(cfg *Config, rc RepoConfig, pr *ghclient.PR) (Source, string) {
-	global := Source{Author: cfg.Author, BranchPrefix: cfg.BranchPrefix, MinWorkingDays: cfg.MinWorkingDays}
+	global := Source{Author: cfg.Author, BranchPrefix: cfg.BranchPrefix}
 	for _, s := range append([]Source{global}, rc.ExtraSources...) {
 		if pr.Author == s.Author && strings.HasPrefix(pr.HeadRef, s.BranchPrefix) {
 			return s, ""
@@ -205,23 +196,4 @@ func allChecksGreen(runs []ghclient.CheckRun) bool {
 		}
 	}
 	return true
-}
-
-// workingDaysBetween counts weekdays (Mon-Fri, UTC calendar dates) in the
-// half-open interval [created, now) — i.e. including created's own day if
-// it's a weekday, excluding today. Mirrors the age gate in rancher/rancher's
-// auto-approve-bot-prs.yml so behavior stays consistent across both.
-func workingDaysBetween(created, now time.Time) int {
-	created = created.UTC()
-	now = now.UTC()
-	day := time.Date(created.Year(), created.Month(), created.Day(), 0, 0, 0, 0, time.UTC)
-	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
-	days := 0
-	for day.Before(today) {
-		if wd := day.Weekday(); wd != time.Saturday && wd != time.Sunday {
-			days++
-		}
-		day = day.AddDate(0, 0, 1)
-	}
-	return days
 }

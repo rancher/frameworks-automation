@@ -1,5 +1,5 @@
 // Package renovateapprove implements the Renovate auto-approve sweep: for
-// every configured repo, find open Renovate PRs that are old enough and have
+// every configured repo, find open Renovate PRs with
 // green CI, then approve them, regardless of whether GitHub-native auto-merge
 // has been requested on the PR (many repos in scope have "Allow auto-merge"
 // off). Approval satisfies each repo's `required_approving_review_count: 1`
@@ -44,9 +44,6 @@ type RepoConfig struct {
 type Source struct {
 	Author       string `yaml:"author"`
 	BranchPrefix string `yaml:"branch-prefix"`
-	// MinWorkingDays is this source's soak time (see Config.MinWorkingDays).
-	// Unlike the global Renovate default, extra sources default to 0 (no soak).
-	MinWorkingDays int `yaml:"min-working-days,omitempty"`
 	// AutoMerge makes the sweep also enable GitHub-native auto-merge on
 	// matching PRs once approved. The repo must allow auto-merge.
 	AutoMerge bool `yaml:"auto-merge,omitempty"`
@@ -71,9 +68,6 @@ type Config struct {
 	// BranchPrefix filters candidate PRs by head branch, as defense in
 	// depth alongside the author check. Defaults to "renovate/".
 	BranchPrefix string `yaml:"branch-prefix,omitempty"`
-	// MinWorkingDays is the soak time (Mon-Fri, UTC) a PR must sit open
-	// before it's eligible for auto-approve. Defaults to 1.
-	MinWorkingDays int `yaml:"min-working-days,omitempty"`
 
 	Repos []RepoConfig `yaml:"repos"`
 }
@@ -103,17 +97,11 @@ func (c *Config) applyDefaults() {
 	if c.BranchPrefix == "" {
 		c.BranchPrefix = "renovate/"
 	}
-	if c.MinWorkingDays == 0 {
-		c.MinWorkingDays = 1
-	}
 }
 
 func (c *Config) validate() error {
 	if len(c.Repos) == 0 {
 		return fmt.Errorf("repos is required and must be non-empty")
-	}
-	if c.MinWorkingDays < 0 {
-		return fmt.Errorf("min-working-days must be >= 0, got %d", c.MinWorkingDays)
 	}
 	seen := make(map[string]bool, len(c.Repos))
 	for i, r := range c.Repos {
@@ -130,9 +118,6 @@ func (c *Config) validate() error {
 		for j, src := range r.ExtraSources {
 			if src.Author == "" || src.BranchPrefix == "" {
 				return fmt.Errorf("repos[%d] (%s): extra-sources[%d]: author and branch-prefix are required", i, r.Repo, j)
-			}
-			if src.MinWorkingDays < 0 {
-				return fmt.Errorf("repos[%d] (%s): extra-sources[%d]: min-working-days must be >= 0, got %d", i, r.Repo, j, src.MinWorkingDays)
 			}
 			switch src.MergeMethod {
 			case "", "MERGE", "SQUASH", "REBASE":
