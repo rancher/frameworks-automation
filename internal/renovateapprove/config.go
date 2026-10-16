@@ -44,6 +44,21 @@ type RepoConfig struct {
 type Source struct {
 	Author       string `yaml:"author"`
 	BranchPrefix string `yaml:"branch-prefix"`
+	// MinWorkingDays is this source's soak time (see Config.MinWorkingDays).
+	// Unlike the global Renovate default, extra sources default to 0 (no soak).
+	MinWorkingDays int `yaml:"min-working-days,omitempty"`
+	// AutoMerge makes the sweep also enable GitHub-native auto-merge on
+	// matching PRs once approved. The repo must allow auto-merge.
+	AutoMerge bool `yaml:"auto-merge,omitempty"`
+	// MergeMethod is MERGE, SQUASH or REBASE. Defaults to SQUASH.
+	MergeMethod string `yaml:"merge-method,omitempty"`
+}
+
+func (s Source) mergeMethod() string {
+	if s.MergeMethod == "" {
+		return "SQUASH"
+	}
+	return s.MergeMethod
 }
 
 // Config is the top-level renovate-approve policy + repo list.
@@ -115,6 +130,14 @@ func (c *Config) validate() error {
 		for j, src := range r.ExtraSources {
 			if src.Author == "" || src.BranchPrefix == "" {
 				return fmt.Errorf("repos[%d] (%s): extra-sources[%d]: author and branch-prefix are required", i, r.Repo, j)
+			}
+			if src.MinWorkingDays < 0 {
+				return fmt.Errorf("repos[%d] (%s): extra-sources[%d]: min-working-days must be >= 0, got %d", i, r.Repo, j, src.MinWorkingDays)
+			}
+			switch src.MergeMethod {
+			case "", "MERGE", "SQUASH", "REBASE":
+			default:
+				return fmt.Errorf("repos[%d] (%s): extra-sources[%d]: merge-method %q must be MERGE, SQUASH or REBASE", i, r.Repo, j, src.MergeMethod)
 			}
 		}
 		if r.TokenEnv == "" {

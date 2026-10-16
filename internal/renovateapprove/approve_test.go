@@ -21,6 +21,7 @@ type fakeGH struct {
 	approveErr map[string]error                          // repo -> error from ApprovePR
 
 	approveCalls []approveCall
+	autoMerges   []string // "repo/nodeID/method"
 	checkRefs    []string // refs passed to ListCheckRuns, in call order
 }
 
@@ -65,6 +66,11 @@ func (f *fakeGH) ApprovePR(ctx context.Context, repo string, number int, sha, bo
 		return err
 	}
 	f.approveCalls = append(f.approveCalls, approveCall{Repo: repo, Number: number, SHA: sha})
+	return nil
+}
+
+func (f *fakeGH) EnableAutoMerge(ctx context.Context, repo, nodeID, mergeMethod string) error {
+	f.autoMerges = append(f.autoMerges, repo+"/"+nodeID+"/"+mergeMethod)
 	return nil
 }
 
@@ -354,6 +360,7 @@ func extraSourceConfig() *Config {
 			ExtraSources: []Source{{
 				Author:       "rancher-pr-and-push-webhook[bot]",
 				BranchPrefix: "automation/sync-deps-",
+				AutoMerge:    true,
 			}},
 		}},
 	}
@@ -407,5 +414,96 @@ func TestRun_ExtraSourceScopedToItsRepo(t *testing.T) {
 	Run(context.Background(), gh, testConfig(), now, false)
 	if len(gh.approveCalls) != 0 {
 		t.Fatalf("approveCalls = %d, want 0", len(gh.approveCalls))
+	}
+}
+
+func TestRun_ExtraSourceNoSoakByDefault(t *testing.T) {
+	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	gh := newFakeGH()
+	pr := basePR(1979, now)
+	pr.Author = "rancher-pr-and-push-webhook[bot]"
+	pr.HeadRef = "automation/sync-deps-main"
+	pr.CreatedAt = now.Add(-time.Hour)
+	gh.prs["rancher/webhook"] = []*ghclient.PR{pr}
+	gh.checkRuns["rancher/webhook"] = map[string][]ghclient.CheckRun{pr.HeadSHA: greenRuns()}
+
+	Run(context.Background(), gh, extraSourceConfig(), now, false)
+	if len(gh.approveCalls) != 1 {
+		t.Fatalf("approveCalls = %d, want 1", len(gh.approveCalls))
+	}
+}
+
+func TestRun_ExtraSourceHonorsMinWorkingDays(t *testing.T) {
+	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	gh := newFakeGH()
+	cfg := extraSourceConfig()
+	cfg.Repos[0].ExtraSources[0].MinWorkingDays = 1
+	pr := basePR(1979, now)
+	pr.Author = "rancher-pr-and-push-webhook[bot]"
+	pr.HeadRef = "automation/sync-deps-main"
+	pr.CreatedAt = now.Add(-time.Hour)
+	gh.prs["rancher/webhook"] = []*ghclient.PR{pr}
+	gh.checkRuns["rancher/webhook"] = map[string][]ghclient.CheckRun{pr.HeadSHA: greenRuns()}
+
+	Run(context.Background(), gh, cfg, now, false)
+	if len(gh.approveCalls) != 0 {
+		t.Fatalf("approveCalls = %d, want 0", len(gh.approveCalls))
+	}
+}
+
+func syncPR(now time.Time) *ghclient.PR {
+	pr := basePR(1979, now)
+	pr.NodeID = "PR_node"
+	pr.Author = "rancher-pr-and-push-webhook[bot]"
+	pr.HeadRef = "automation/sync-deps-main"
+	pr.AutoMerge = false
+	return pr
+}
+
+func TestRun_EnablesAutoMergeAfterApprove(t *testing.T) {
+	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	gh := newFakeGH()
+	pr := syncPR(now)
+	gh.prs["rancher/webhook"] = []*ghclient.PR{pr}
+	gh.checkRuns["rancher/webhook"] = map[string][]ghclient.CheckRun{pr.HeadSHA: greenRuns()}
+
+	res := Run(context.Background(), gh, extraSourceConfig(), now, false)
+	if len(gh.autoMerges) != 1 || gh.autoMerges[0] != "rancher/webhook/PR_node/SQUASH" {
+		t.Fatalf("autoMerges = %v", gh.autoMerges)
+	}
+	if !res.Outcomes[0].AutoMergeEnabled {
+		t.Error("AutoMergeEnabled = false")
+	}
+}
+
+func TestRun_EnablesAutoMergeWhenAlreadyApproved(t *testing.T) {
+	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	gh := newFakeGH()
+	pr := syncPR(now)
+	gh.prs["rancher/webhook"] = []*ghclient.PR{pr}
+	gh.approved["rancher/webhook"] = map[int]bool{pr.Number: true}
+
+	Run(context.Background(), gh, extraSourceConfig(), now, false)
+	if len(gh.approveCalls) != 0 || len(gh.autoMerges) != 1 {
+		t.Fatalf("approves=%d autoMerges=%v", len(gh.approveCalls), gh.autoMerges)
+	}
+}
+
+func TestRun_SkipsAutoMergeWhenAlreadyEnabledOrChecksRed(t *testing.T) {
+	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	gh := newFakeGH()
+	enabled := syncPR(now)
+	enabled.AutoMerge = true
+	red := syncPR(now)
+	red.Number, red.HeadSHA = 2000, "sha-red"
+	gh.prs["rancher/webhook"] = []*ghclient.PR{enabled, red}
+	gh.checkRuns["rancher/webhook"] = map[string][]ghclient.CheckRun{
+		enabled.HeadSHA: greenRuns(),
+		red.HeadSHA:     {{Name: "ci", Status: "completed", Conclusion: "failure"}},
+	}
+
+	Run(context.Background(), gh, extraSourceConfig(), now, false)
+	if len(gh.autoMerges) != 0 {
+		t.Fatalf("autoMerges = %v, want none", gh.autoMerges)
 	}
 }

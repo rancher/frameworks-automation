@@ -253,6 +253,9 @@ func runApproveRenovate(ctx context.Context, path string, force bool) {
 		} else {
 			log.Printf("approve-renovate: skipped %s#%d: %s", o.Repo, o.Number, o.Reason)
 		}
+		if o.AutoMergeEnabled {
+			log.Printf("approve-renovate: enabled auto-merge on %s#%d", o.Repo, o.Number)
+		}
 	}
 	log.Printf("approve-renovate: %d approved, %d skipped, %d repo failures", len(res.Approved()), len(res.Outcomes)-len(res.Approved()), res.Failed)
 	if res.Failed > 0 {

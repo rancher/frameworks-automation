@@ -18,6 +18,7 @@ type gitHubClient interface {
 	ListCheckRuns(ctx context.Context, repo, ref string) ([]ghclient.CheckRun, error)
 	HasApproval(ctx context.Context, repo string, number int) (bool, error)
 	ApprovePR(ctx context.Context, repo string, number int, sha, body string) error
+	EnableAutoMerge(ctx context.Context, repo, nodeID, mergeMethod string) error
 }
 
 // approveBody is the review comment left on every PR the sweep approves.
@@ -29,7 +30,9 @@ type Outcome struct {
 	Number   int
 	Title    string
 	Approved bool
-	Reason   string // set when Approved is false: why it was skipped
+	// AutoMergeEnabled is true when the sweep requested auto-merge on the PR.
+	AutoMergeEnabled bool
+	Reason           string // set when Approved is false: why it was skipped
 }
 
 // Result is the aggregate outcome of one sweep across every configured repo.
@@ -83,70 +86,84 @@ func sweepRepo(ctx context.Context, gh gitHubClient, cfg *Config, rc RepoConfig,
 
 	var out []Outcome
 	for _, pr := range prs {
-		reason, err := ineligibleReason(ctx, gh, cfg, rc, pr, now, force)
+		src, reason, err := ineligibleReason(ctx, gh, cfg, rc, pr, now, force)
 		if err != nil {
 			log.Printf("renovate-approve: %s#%d: %v", repo, pr.Number, err)
 			continue
 		}
-		if reason != "" {
-			out = append(out, Outcome{Repo: repo, Number: pr.Number, Title: pr.Title, Reason: reason})
-			continue
+		o := Outcome{Repo: repo, Number: pr.Number, Title: pr.Title, Reason: reason}
+		if reason == "" {
+			// Pin the review to the head SHA whose checks we just read, so a
+			// force-push landing mid-sweep can't get approved unreviewed.
+			if err := gh.ApprovePR(ctx, repo, pr.Number, pr.HeadSHA, approveBody); err != nil {
+				log.Printf("renovate-approve: %s#%d: approve: %v", repo, pr.Number, err)
+				continue
+			}
+			o.Approved = true
 		}
-		// Pin the review to the head SHA whose checks we just read, so a
-		// force-push landing mid-sweep can't get approved unreviewed.
-		if err := gh.ApprovePR(ctx, repo, pr.Number, pr.HeadSHA, approveBody); err != nil {
-			log.Printf("renovate-approve: %s#%d: approve: %v", repo, pr.Number, err)
-			continue
+		// An already-approved PR still gets auto-merge, so a PR approved
+		// before auto-merge was configured (or by a human) isn't stranded.
+		if (o.Approved || reason == reasonAlreadyApproved) && src.AutoMerge && !pr.AutoMerge {
+			if err := gh.EnableAutoMerge(ctx, repo, pr.NodeID, src.mergeMethod()); err != nil {
+				log.Printf("renovate-approve: %s#%d: %v", repo, pr.Number, err)
+			} else {
+				o.AutoMergeEnabled = true
+			}
 		}
-		out = append(out, Outcome{Repo: repo, Number: pr.Number, Title: pr.Title, Approved: true})
+		out = append(out, o)
 	}
 	return out, nil
 }
 
+const reasonAlreadyApproved = "already approved"
+
 // ineligibleReason returns a non-empty reason string when pr should be left
-// alone, or "" when it should be approved. The only error return is a
-// GitHub-call failure (checks/reviews lookups) — callers should log and skip
-// rather than treat it as a definitive ineligibility.
-func ineligibleReason(ctx context.Context, gh gitHubClient, cfg *Config, rc RepoConfig, pr *ghclient.PR, now time.Time, force bool) (string, error) {
+// alone, or "" when it should be approved. The matched source is returned
+// whenever the PR matched one, even if it was otherwise ineligible. The only
+// error return is a GitHub-call failure (checks/reviews lookups) — callers
+// should log and skip rather than treat it as a definitive ineligibility.
+func ineligibleReason(ctx context.Context, gh gitHubClient, cfg *Config, rc RepoConfig, pr *ghclient.PR, now time.Time, force bool) (Source, string, error) {
 	repo := rc.Repo
-	if reason := sourceMismatch(cfg, rc, pr); reason != "" {
-		return reason, nil
+	src, reason := matchSource(cfg, rc, pr)
+	if reason != "" {
+		return src, reason, nil
 	}
 	if !force {
-		if days := workingDaysBetween(pr.CreatedAt, now); days < cfg.MinWorkingDays {
-			return fmt.Sprintf("too new (%d working day(s) old, need %d)", days, cfg.MinWorkingDays), nil
+		if days := workingDaysBetween(pr.CreatedAt, now); days < src.MinWorkingDays {
+			return src, fmt.Sprintf("too new (%d working day(s) old, need %d)", days, src.MinWorkingDays), nil
 		}
 	}
 	approved, err := gh.HasApproval(ctx, repo, pr.Number)
 	if err != nil {
-		return "", fmt.Errorf("check existing approval: %w", err)
+		return src, "", fmt.Errorf("check existing approval: %w", err)
 	}
 	if approved {
-		return "already approved", nil
+		return src, reasonAlreadyApproved, nil
 	}
 	runs, err := gh.ListCheckRuns(ctx, repo, pr.HeadSHA)
 	if err != nil {
-		return "", fmt.Errorf("list check runs: %w", err)
+		return src, "", fmt.Errorf("list check runs: %w", err)
 	}
 	if !allChecksGreen(runs) {
-		return "checks not all green", nil
+		return src, "checks not all green", nil
 	}
-	return "", nil
+	return src, "", nil
 }
 
-// sourceMismatch returns "" when pr matches the global Renovate source or any
-// of the repo's extra sources, else the reason for the global source's miss.
-func sourceMismatch(cfg *Config, rc RepoConfig, pr *ghclient.PR) string {
-	sources := append([]Source{{Author: cfg.Author, BranchPrefix: cfg.BranchPrefix}}, rc.ExtraSources...)
-	for _, s := range sources {
+// matchSource returns the source pr matches: the global Renovate source or
+// one of the repo's extra sources. When none match, the reason is that of
+// the global source's miss.
+func matchSource(cfg *Config, rc RepoConfig, pr *ghclient.PR) (Source, string) {
+	global := Source{Author: cfg.Author, BranchPrefix: cfg.BranchPrefix, MinWorkingDays: cfg.MinWorkingDays}
+	for _, s := range append([]Source{global}, rc.ExtraSources...) {
 		if pr.Author == s.Author && strings.HasPrefix(pr.HeadRef, s.BranchPrefix) {
-			return ""
+			return s, ""
 		}
 	}
 	if pr.Author != cfg.Author {
-		return "not authored by " + cfg.Author
+		return Source{}, "not authored by " + cfg.Author
 	}
-	return "head branch doesn't match " + cfg.BranchPrefix
+	return Source{}, "head branch doesn't match " + cfg.BranchPrefix
 }
 
 // allChecksGreen requires at least one check run (an unstarted CI run isn't

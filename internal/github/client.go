@@ -257,6 +257,7 @@ func (c *Client) CloseIssue(ctx context.Context, repo string, number int, commen
 
 type PR struct {
 	Number    int
+	NodeID    string // GraphQL global ID
 	Title     string
 	State     string // "open" | "closed"
 	Merged    bool
@@ -420,6 +421,35 @@ func (c *Client) ApprovePR(ctx context.Context, repo string, number int, sha, bo
 	return nil
 }
 
+// EnableAutoMerge requests GitHub-native auto-merge on the PR identified by
+// its GraphQL nodeID (PR.NodeID), using mergeMethod (MERGE, SQUASH or REBASE).
+// The repo must have "Allow auto-merge" enabled; GitHub then merges once
+// branch protection is satisfied. The REST API has no equivalent, so this
+// goes through GraphQL.
+func (c *Client) EnableAutoMerge(ctx context.Context, repo, nodeID, mergeMethod string) error {
+	body := map[string]any{
+		"query": `mutation($id: ID!, $method: PullRequestMergeMethod!) {
+  enablePullRequestAutoMerge(input: {pullRequestId: $id, mergeMethod: $method}) { clientMutationId }
+}`,
+		"variables": map[string]any{"id": nodeID, "method": mergeMethod},
+	}
+	client := c.clientFor(repo)
+	req, err := client.NewRequest("POST", "graphql", body)
+	if err != nil {
+		return fmt.Errorf("enable auto-merge %s: %w", repo, err)
+	}
+	var out struct {
+		Errors []struct{ Message string } `json:"errors"`
+	}
+	if _, err := client.Do(ctx, req, &out); err != nil {
+		return fmt.Errorf("enable auto-merge %s: %w", repo, err)
+	}
+	if len(out.Errors) > 0 {
+		return fmt.Errorf("enable auto-merge %s: %s", repo, out.Errors[0].Message)
+	}
+	return nil
+}
+
 func (c *Client) CreatePR(ctx context.Context, repo, title, body, head, base string) (*PR, error) {
 	owner, name, err := splitRepo(repo)
 	if err != nil {
@@ -511,6 +541,7 @@ func toIssue(i *gh.Issue) *Issue {
 func toPR(p *gh.PullRequest) *PR {
 	return &PR{
 		Number:    p.GetNumber(),
+		NodeID:    p.GetNodeID(),
 		Title:     p.GetTitle(),
 		State:     p.GetState(),
 		Merged:    p.GetMerged(),
