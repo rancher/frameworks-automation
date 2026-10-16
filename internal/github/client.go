@@ -421,6 +421,11 @@ func (c *Client) ApprovePR(ctx context.Context, repo string, number int, sha, bo
 	return nil
 }
 
+// ErrPRClean is returned by EnableAutoMerge when GitHub refuses because the PR
+// is already mergeable: auto-merge can only be enabled on a blocked PR, so the
+// caller should merge directly instead.
+var ErrPRClean = errors.New("pull request is already mergeable")
+
 // EnableAutoMerge requests GitHub-native auto-merge on the PR identified by
 // its GraphQL nodeID (PR.NodeID), using mergeMethod (MERGE, SQUASH or REBASE).
 // The repo must have "Allow auto-merge" enabled; GitHub then merges once
@@ -445,7 +450,29 @@ func (c *Client) EnableAutoMerge(ctx context.Context, repo, nodeID, mergeMethod 
 		return fmt.Errorf("enable auto-merge %s: %w", repo, err)
 	}
 	if len(out.Errors) > 0 {
-		return fmt.Errorf("enable auto-merge %s: %s", repo, out.Errors[0].Message)
+		msg := out.Errors[0].Message
+		if strings.Contains(msg, "clean status") {
+			return fmt.Errorf("enable auto-merge %s: %w", repo, ErrPRClean)
+		}
+		return fmt.Errorf("enable auto-merge %s: %s", repo, msg)
+	}
+	return nil
+}
+
+// MergePR merges the PR immediately using mergeMethod (MERGE, SQUASH or
+// REBASE), pinned to sha so a push landing mid-call fails the merge instead
+// of merging an unchecked commit.
+func (c *Client) MergePR(ctx context.Context, repo string, number int, sha, mergeMethod string) error {
+	owner, name, err := splitRepo(repo)
+	if err != nil {
+		return err
+	}
+	_, _, err = c.clientFor(repo).PullRequests.Merge(ctx, owner, name, number, "", &gh.PullRequestOptions{
+		SHA:         sha,
+		MergeMethod: strings.ToLower(mergeMethod),
+	})
+	if err != nil {
+		return fmt.Errorf("merge PR %s#%d: %w", repo, number, err)
 	}
 	return nil
 }

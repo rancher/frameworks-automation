@@ -2,6 +2,7 @@ package renovateapprove
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -19,6 +20,7 @@ type gitHubClient interface {
 	HasApproval(ctx context.Context, repo string, number int) (bool, error)
 	ApprovePR(ctx context.Context, repo string, number int, sha, body string) error
 	EnableAutoMerge(ctx context.Context, repo, nodeID, mergeMethod string) error
+	MergePR(ctx context.Context, repo string, number int, sha, mergeMethod string) error
 }
 
 // approveBody is the review comment left on every PR the sweep approves.
@@ -32,7 +34,10 @@ type Outcome struct {
 	Approved bool
 	// AutoMergeEnabled is true when the sweep requested auto-merge on the PR.
 	AutoMergeEnabled bool
-	Reason           string // set when Approved is false: why it was skipped
+	// Merged is true when the PR was already mergeable (auto-merge refused)
+	// and the sweep merged it directly.
+	Merged bool
+	Reason string // set when Approved is false: why it was skipped
 }
 
 // Result is the aggregate outcome of one sweep across every configured repo.
@@ -92,6 +97,23 @@ func sweepRepo(ctx context.Context, gh gitHubClient, cfg *Config, rc RepoConfig,
 			continue
 		}
 		o := Outcome{Repo: repo, Number: pr.Number, Title: pr.Title, Reason: reason}
+		wantAutoMerge := (reason == "" || reason == reasonAlreadyApproved) && src.AutoMerge && !pr.AutoMerge
+		mergeNow := false
+		// Auto-merge can only be enabled while the PR is still blocked, so
+		// request it before approving: the approval then releases the merge.
+		// An already-approved PR gets it too, so one approved before
+		// auto-merge was configured (or by a human) isn't stranded.
+		if wantAutoMerge {
+			switch err := gh.EnableAutoMerge(ctx, repo, pr.NodeID, src.mergeMethod()); {
+			case err == nil:
+				o.AutoMergeEnabled = true
+			case errors.Is(err, ghclient.ErrPRClean):
+				// Nothing left to wait for; merge directly after approving.
+				mergeNow = true
+			default:
+				log.Printf("renovate-approve: %s#%d: %v", repo, pr.Number, err)
+			}
+		}
 		if reason == "" {
 			// Pin the review to the head SHA whose checks we just read, so a
 			// force-push landing mid-sweep can't get approved unreviewed.
@@ -101,13 +123,11 @@ func sweepRepo(ctx context.Context, gh gitHubClient, cfg *Config, rc RepoConfig,
 			}
 			o.Approved = true
 		}
-		// An already-approved PR still gets auto-merge, so a PR approved
-		// before auto-merge was configured (or by a human) isn't stranded.
-		if (o.Approved || reason == reasonAlreadyApproved) && src.AutoMerge && !pr.AutoMerge {
-			if err := gh.EnableAutoMerge(ctx, repo, pr.NodeID, src.mergeMethod()); err != nil {
+		if mergeNow {
+			if err := gh.MergePR(ctx, repo, pr.Number, pr.HeadSHA, src.mergeMethod()); err != nil {
 				log.Printf("renovate-approve: %s#%d: %v", repo, pr.Number, err)
 			} else {
-				o.AutoMergeEnabled = true
+				o.Merged = true
 			}
 		}
 		out = append(out, o)

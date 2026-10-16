@@ -22,6 +22,9 @@ type fakeGH struct {
 
 	approveCalls []approveCall
 	autoMerges   []string // "repo/nodeID/method"
+	merges       []string // "repo#number@sha/method"
+	cleanPRs     bool     // EnableAutoMerge fails with ErrPRClean
+	callOrder    []string
 	checkRefs    []string // refs passed to ListCheckRuns, in call order
 }
 
@@ -65,12 +68,23 @@ func (f *fakeGH) ApprovePR(ctx context.Context, repo string, number int, sha, bo
 	if err := f.approveErr[repo]; err != nil {
 		return err
 	}
+	f.callOrder = append(f.callOrder, "approve")
 	f.approveCalls = append(f.approveCalls, approveCall{Repo: repo, Number: number, SHA: sha})
 	return nil
 }
 
 func (f *fakeGH) EnableAutoMerge(ctx context.Context, repo, nodeID, mergeMethod string) error {
+	f.callOrder = append(f.callOrder, "automerge")
+	if f.cleanPRs {
+		return ghclient.ErrPRClean
+	}
 	f.autoMerges = append(f.autoMerges, repo+"/"+nodeID+"/"+mergeMethod)
+	return nil
+}
+
+func (f *fakeGH) MergePR(ctx context.Context, repo string, number int, sha, mergeMethod string) error {
+	f.callOrder = append(f.callOrder, "merge")
+	f.merges = append(f.merges, fmt.Sprintf("%s#%d@%s/%s", repo, number, sha, mergeMethod))
 	return nil
 }
 
@@ -473,6 +487,29 @@ func TestRun_EnablesAutoMergeAfterApprove(t *testing.T) {
 	}
 	if !res.Outcomes[0].AutoMergeEnabled {
 		t.Error("AutoMergeEnabled = false")
+	}
+	if got := fmt.Sprint(gh.callOrder); got != "[automerge approve]" {
+		t.Errorf("call order = %s, want auto-merge before approve", got)
+	}
+}
+
+func TestRun_MergesDirectlyWhenPRAlreadyClean(t *testing.T) {
+	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
+	gh := newFakeGH()
+	gh.cleanPRs = true
+	pr := syncPR(now)
+	gh.prs["rancher/webhook"] = []*ghclient.PR{pr}
+	gh.checkRuns["rancher/webhook"] = map[string][]ghclient.CheckRun{pr.HeadSHA: greenRuns()}
+
+	res := Run(context.Background(), gh, extraSourceConfig(), now, false)
+	if len(gh.merges) != 1 || gh.merges[0] != "rancher/webhook#1979@sha-1979/SQUASH" {
+		t.Fatalf("merges = %v", gh.merges)
+	}
+	if got := fmt.Sprint(gh.callOrder); got != "[automerge approve merge]" {
+		t.Errorf("call order = %s", got)
+	}
+	if !res.Outcomes[0].Merged || res.Outcomes[0].AutoMergeEnabled {
+		t.Errorf("outcome = %+v", res.Outcomes[0])
 	}
 }
 
