@@ -68,6 +68,12 @@ type Config struct {
 	// BranchPrefix filters candidate PRs by head branch, as defense in
 	// depth alongside the author check. Defaults to "renovate/".
 	BranchPrefix string `yaml:"branch-prefix,omitempty"`
+	// AutoMerge makes the sweep enable GitHub-native auto-merge on
+	// approved PRs. Applies to the global source; extra-sources can
+	// override per-repo.
+	AutoMerge bool `yaml:"auto-merge,omitempty"`
+	// MergeMethod is MERGE, SQUASH or REBASE. Defaults to SQUASH.
+	MergeMethod string `yaml:"merge-method,omitempty"`
 
 	Repos []RepoConfig `yaml:"repos"`
 }
@@ -102,6 +108,11 @@ func (c *Config) applyDefaults() {
 func (c *Config) validate() error {
 	if len(c.Repos) == 0 {
 		return fmt.Errorf("repos is required and must be non-empty")
+	}
+	switch c.MergeMethod {
+	case "", "MERGE", "SQUASH", "REBASE":
+	default:
+		return fmt.Errorf("merge-method %q must be MERGE, SQUASH or REBASE", c.MergeMethod)
 	}
 	seen := make(map[string]bool, len(c.Repos))
 	for i, r := range c.Repos {

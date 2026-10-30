@@ -18,6 +18,7 @@
 
 author: renovate-rancher[bot]
 branch-prefix: renovate/
+auto-merge: true
 
 repos:
   - repo: rancher/apiserver
