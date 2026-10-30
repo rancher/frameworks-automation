@@ -95,3 +95,47 @@ func TestConfig_Tokens_MissingEnv(t *testing.T) {
 		t.Fatal("expected error for missing env var")
 	}
 }
+
+func TestLoad_GlobalAutoMerge(t *testing.T) {
+	path := writeConfig(t, `
+auto-merge: true
+merge-method: REBASE
+repos:
+  - repo: rancher/steve
+    token-env: GH_TOKEN_STEVE
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.AutoMerge || cfg.MergeMethod != "REBASE" {
+		t.Errorf("AutoMerge=%v MergeMethod=%q", cfg.AutoMerge, cfg.MergeMethod)
+	}
+}
+
+func TestLoad_AutoMergeDefaultsOff(t *testing.T) {
+	path := writeConfig(t, `
+repos:
+  - repo: rancher/steve
+    token-env: GH_TOKEN_STEVE
+`)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.AutoMerge {
+		t.Error("AutoMerge should default to false")
+	}
+}
+
+func TestLoad_RejectsInvalidGlobalMergeMethod(t *testing.T) {
+	path := writeConfig(t, `
+merge-method: FASTFORWARD
+repos:
+  - repo: rancher/steve
+    token-env: GH_TOKEN_STEVE
+`)
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected error for invalid merge-method")
+	}
+}

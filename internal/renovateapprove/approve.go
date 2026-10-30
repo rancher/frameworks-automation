@@ -165,7 +165,12 @@ func ineligibleReason(ctx context.Context, gh gitHubClient, cfg *Config, rc Repo
 // one of the repo's extra sources. When none match, the reason is that of
 // the global source's miss.
 func matchSource(cfg *Config, rc RepoConfig, pr *ghclient.PR) (Source, string) {
-	global := Source{Author: cfg.Author, BranchPrefix: cfg.BranchPrefix}
+	global := Source{
+		Author:       cfg.Author,
+		BranchPrefix: cfg.BranchPrefix,
+		AutoMerge:    cfg.AutoMerge,
+		MergeMethod:  cfg.MergeMethod,
+	}
 	for _, s := range append([]Source{global}, rc.ExtraSources...) {
 		if pr.Author == s.Author && strings.HasPrefix(pr.HeadRef, s.BranchPrefix) {
 			return s, ""

@@ -470,3 +470,112 @@ func TestRun_SkipsAutoMergeWhenAlreadyEnabledOrChecksRed(t *testing.T) {
 		t.Fatalf("autoMerges = %v, want none", gh.autoMerges)
 	}
 }
+
+func globalAutoMergeConfig(method string) *Config {
+	c := testConfig()
+	c.AutoMerge = true
+	c.MergeMethod = method
+	return c
+}
+
+func renovatePR(now time.Time) *ghclient.PR {
+	pr := basePR(1463, now)
+	pr.NodeID = "PR_renovate"
+	pr.AutoMerge = false
+	return pr
+}
+
+func TestRun_GlobalAutoMergeEnabledBeforeApprove(t *testing.T) {
+	now := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	gh := newFakeGH()
+	pr := renovatePR(now)
+	gh.prs["rancher/steve"] = []*ghclient.PR{pr}
+	gh.checkRuns["rancher/steve"] = map[string][]ghclient.CheckRun{pr.HeadSHA: greenRuns()}
+
+	res := Run(context.Background(), gh, globalAutoMergeConfig(""))
+	if len(gh.autoMerges) != 1 || gh.autoMerges[0] != "rancher/steve/PR_renovate/SQUASH" {
+		t.Fatalf("autoMerges = %v", gh.autoMerges)
+	}
+	if got := fmt.Sprint(gh.callOrder); got != "[automerge approve]" {
+		t.Errorf("call order = %s, want auto-merge before approve", got)
+	}
+	if !res.Outcomes[0].Approved || !res.Outcomes[0].AutoMergeEnabled {
+		t.Errorf("outcome = %+v", res.Outcomes[0])
+	}
+}
+
+func TestRun_GlobalAutoMergeEnabledOnAlreadyApprovedPR(t *testing.T) {
+	now := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	gh := newFakeGH()
+	pr := renovatePR(now)
+	gh.prs["rancher/steve"] = []*ghclient.PR{pr}
+	gh.approved["rancher/steve"] = map[int]bool{pr.Number: true}
+
+	res := Run(context.Background(), gh, globalAutoMergeConfig(""))
+	if len(gh.approveCalls) != 0 {
+		t.Errorf("approveCalls = %+v, want none", gh.approveCalls)
+	}
+	if len(gh.autoMerges) != 1 || !res.Outcomes[0].AutoMergeEnabled {
+		t.Fatalf("autoMerges = %v, outcome = %+v", gh.autoMerges, res.Outcomes[0])
+	}
+}
+
+func TestRun_GlobalAutoMergeMergesDirectlyWhenPRAlreadyClean(t *testing.T) {
+	now := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	gh := newFakeGH()
+	gh.cleanPRs = true
+	pr := renovatePR(now)
+	gh.prs["rancher/steve"] = []*ghclient.PR{pr}
+	gh.approved["rancher/steve"] = map[int]bool{pr.Number: true}
+
+	res := Run(context.Background(), gh, globalAutoMergeConfig(""))
+	if len(gh.merges) != 1 || gh.merges[0] != "rancher/steve#1463@sha-1463/SQUASH" {
+		t.Fatalf("merges = %v", gh.merges)
+	}
+	if !res.Outcomes[0].Merged {
+		t.Errorf("outcome = %+v", res.Outcomes[0])
+	}
+}
+
+func TestRun_GlobalAutoMergeUsesConfiguredMethod(t *testing.T) {
+	now := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	gh := newFakeGH()
+	pr := renovatePR(now)
+	gh.prs["rancher/steve"] = []*ghclient.PR{pr}
+	gh.checkRuns["rancher/steve"] = map[string][]ghclient.CheckRun{pr.HeadSHA: greenRuns()}
+
+	Run(context.Background(), gh, globalAutoMergeConfig("REBASE"))
+	if len(gh.autoMerges) != 1 || gh.autoMerges[0] != "rancher/steve/PR_renovate/REBASE" {
+		t.Fatalf("autoMerges = %v", gh.autoMerges)
+	}
+}
+
+func TestRun_AutoMergeOffByDefault(t *testing.T) {
+	now := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	gh := newFakeGH()
+	pr := renovatePR(now)
+	gh.prs["rancher/steve"] = []*ghclient.PR{pr}
+	gh.checkRuns["rancher/steve"] = map[string][]ghclient.CheckRun{pr.HeadSHA: greenRuns()}
+
+	Run(context.Background(), gh, testConfig())
+	if len(gh.autoMerges) != 0 || len(gh.merges) != 0 {
+		t.Fatalf("autoMerges = %v, merges = %v, want none", gh.autoMerges, gh.merges)
+	}
+	if len(gh.approveCalls) != 1 {
+		t.Errorf("approveCalls = %+v, want PR still approved", gh.approveCalls)
+	}
+}
+
+func TestRun_GlobalAutoMergeIgnoresIneligibleAuthor(t *testing.T) {
+	now := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	gh := newFakeGH()
+	pr := renovatePR(now)
+	pr.Author = "someone-else"
+	gh.prs["rancher/steve"] = []*ghclient.PR{pr}
+	gh.approved["rancher/steve"] = map[int]bool{pr.Number: true}
+
+	Run(context.Background(), gh, globalAutoMergeConfig(""))
+	if len(gh.autoMerges) != 0 {
+		t.Fatalf("autoMerges = %v, want none for non-Renovate author", gh.autoMerges)
+	}
+}
