@@ -535,7 +535,12 @@ func (r *Reconciler) fillTagPromptHints(
 			}
 			tg.WorkflowURL = fmt.Sprintf("https://github.com/%s/actions/workflows/cut-release.yaml", ghRepo)
 
-			minor := minorForRepoBranch(tg.Repo, tg.Branch, leafTable, dependentTables)
+			var minor string
+			if repo.Kind == config.KindIndependent {
+				minor = "unknown (version determined independant from rancher)"
+			} else {
+				minor = minorForRepoBranch(tg.Repo, tg.Branch, leafTable, dependentTables)
+			}
 			if minor == "" {
 				continue
 			}
