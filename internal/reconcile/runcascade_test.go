@@ -2,10 +2,12 @@ package reconcile
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 
 	"go.yaml.in/yaml/v3"
@@ -36,6 +38,167 @@ func TestRunCascade_Fixtures(t *testing.T) {
 		}
 		t.Run(e.Name(), func(t *testing.T) {
 			runFixture(t, filepath.Join(root, e.Name()))
+		})
+	}
+}
+
+func TestFillTagPromptHints(t *testing.T) {
+	const (
+		unknownMinor = "unknown (version determined independant from rancher)"
+		urlFmt       = "https://github.com/%s/actions/workflows/cut-release.yaml"
+	)
+	mustTable := func(rows ...string) *config.VersionTable {
+		t.Helper()
+		md := "| Branch | Minor |\n|---|---|\n"
+		for _, r := range rows {
+			md += r + "\n"
+		}
+		tbl, err := config.ParseVersionTable(md)
+		if err != nil {
+			t.Fatalf("parse table: %v", err)
+		}
+		return tbl
+	}
+	leafTable := mustTable("| release/v2.12 | v2.12 |")
+	webhookTable := mustTable("| main | v0.11 |", "| release/v0.10 | v0.10 |")
+
+	cfg := &config.Config{Repos: map[string]config.Repo{
+		"rancher":         {Kind: config.KindLeaf, Repo: "rancher/rancher"},
+		"webhook":         {Kind: config.KindPaired, Repo: "rancher/webhook", NextTagStrategy: config.NextTagRC},
+		"webhook-unrc":    {Kind: config.KindPaired, Repo: "rancher/webhook-unrc", NextTagStrategy: config.NextTagUnRC},
+		"wrangler":        {Kind: config.KindIndependent, Repo: "rancher/wrangler"},
+		"no-tag-access":   {Kind: config.KindPaired, Repo: "rancher/no-tag-access"},
+		"missing-gh-repo": {Kind: config.KindPaired},
+	}}
+	ghRepos := func() map[string]*fakeRepoState {
+		return map[string]*fakeRepoState{
+			"rancher/rancher":      {Tags: []string{"v2.12.1", "v2.12.0", "v2.11.5"}},
+			"rancher/webhook":      {Tags: []string{"v0.11.0-rc.5", "v0.10.3"}},
+			"rancher/webhook-unrc": {Tags: []string{"v0.11.0-rc.5", "v0.10.3"}},
+			"rancher/wrangler":     {Tags: []string{"v0.7.5"}},
+		}
+	}
+
+	type tag = cascade.TagPrompt
+	tests := []struct {
+		name            string
+		leafTable       *config.VersionTable
+		dependentTables map[string]*config.VersionTable
+		stages          []cascade.Stage
+		want            []cascade.Stage
+		wantErr         string
+	}{
+		{
+			name:      "leaf repo uses leaf table with default patch strategy",
+			leafTable: leafTable,
+			stages:    []cascade.Stage{{Tags: []tag{{Repo: "rancher", Branch: "release/v2.12"}}}},
+			want: []cascade.Stage{{Tags: []tag{
+				{Repo: "rancher", Branch: "release/v2.12", Expected: "v2.12.2", WorkflowURL: fmt.Sprintf(urlFmt, "rancher/rancher")},
+			}}},
+		},
+		{
+			name:            "paired repo uses its own table with rc strategy",
+			dependentTables: map[string]*config.VersionTable{"webhook": webhookTable},
+			stages:          []cascade.Stage{{Tags: []tag{{Repo: "webhook", Branch: "main"}}}},
+			want: []cascade.Stage{{Tags: []tag{
+				{Repo: "webhook", Branch: "main", Expected: "v0.11.0-rc.6", WorkflowURL: fmt.Sprintf(urlFmt, "rancher/webhook")},
+			}}},
+		},
+		{
+			name:            "paired repo table wins over leaf table",
+			leafTable:       mustTable("| main | v9.9 |"),
+			dependentTables: map[string]*config.VersionTable{"webhook": webhookTable},
+			stages:          []cascade.Stage{{Tags: []tag{{Repo: "webhook", Branch: "release/v0.10"}}}},
+			want: []cascade.Stage{{Tags: []tag{
+				{Repo: "webhook", Branch: "release/v0.10", Expected: "v0.10.4-rc.1", WorkflowURL: fmt.Sprintf(urlFmt, "rancher/webhook")},
+			}}},
+		},
+		{
+			name:            "unrc strategy drops the rc suffix",
+			dependentTables: map[string]*config.VersionTable{"webhook-unrc": webhookTable},
+			stages:          []cascade.Stage{{Tags: []tag{{Repo: "webhook-unrc", Branch: "main"}}}},
+			want: []cascade.Stage{{Tags: []tag{
+				{Repo: "webhook-unrc", Branch: "main", Expected: "v0.11.0", WorkflowURL: fmt.Sprintf(urlFmt, "rancher/webhook-unrc")},
+			}}},
+		},
+		{
+			name:   "independent repo ignores version tables",
+			stages: []cascade.Stage{{Tags: []tag{{Repo: "wrangler", Branch: "main"}}}},
+			want: []cascade.Stage{{Tags: []tag{
+				{Repo: "wrangler", Branch: "main", Expected: unknownMinor + ".0", WorkflowURL: fmt.Sprintf(urlFmt, "rancher/wrangler")},
+			}}},
+		},
+		{
+			name:            "branch missing from table leaves Expected blank but sets URL",
+			dependentTables: map[string]*config.VersionTable{"webhook": webhookTable},
+			stages:          []cascade.Stage{{Tags: []tag{{Repo: "webhook", Branch: "release/v0.1"}}}},
+			want: []cascade.Stage{{Tags: []tag{
+				{Repo: "webhook", Branch: "release/v0.1", WorkflowURL: fmt.Sprintf(urlFmt, "rancher/webhook")},
+			}}},
+		},
+		{
+			name:   "no tables available leaves Expected blank",
+			stages: []cascade.Stage{{Tags: []tag{{Repo: "rancher", Branch: "release/v2.12"}}}},
+			want: []cascade.Stage{{Tags: []tag{
+				{Repo: "rancher", Branch: "release/v2.12", WorkflowURL: fmt.Sprintf(urlFmt, "rancher/rancher")},
+			}}},
+		},
+		{
+			name:      "repo not in config is left untouched",
+			leafTable: leafTable,
+			stages:    []cascade.Stage{{Tags: []tag{{Repo: "unknown", Branch: "main", Expected: "keep"}}}},
+			want:      []cascade.Stage{{Tags: []tag{{Repo: "unknown", Branch: "main", Expected: "keep"}}}},
+		},
+		{
+			name:            "release listing failure is tolerated",
+			dependentTables: map[string]*config.VersionTable{"no-tag-access": webhookTable},
+			stages:          []cascade.Stage{{Tags: []tag{{Repo: "no-tag-access", Branch: "main"}}}},
+			want: []cascade.Stage{{Tags: []tag{
+				{Repo: "no-tag-access", Branch: "main", WorkflowURL: fmt.Sprintf(urlFmt, "rancher/no-tag-access")},
+			}}},
+		},
+		{
+			name:    "repo without GitHub identity errors",
+			stages:  []cascade.Stage{{Tags: []tag{{Repo: "missing-gh-repo", Branch: "main"}}}},
+			wantErr: "repo missing-gh-repo",
+		},
+		{
+			name:            "multiple stages and tags are all filled",
+			leafTable:       leafTable,
+			dependentTables: map[string]*config.VersionTable{"webhook": webhookTable},
+			stages: []cascade.Stage{
+				{Layer: 0, Tags: []tag{{Repo: "webhook", Branch: "main"}, {Repo: "wrangler", Branch: "main"}}},
+				{Layer: 1, Tags: []tag{{Repo: "rancher", Branch: "release/v2.12"}}},
+				{Layer: 2},
+			},
+			want: []cascade.Stage{
+				{Layer: 0, Tags: []tag{
+					{Repo: "webhook", Branch: "main", Expected: "v0.11.0-rc.6", WorkflowURL: fmt.Sprintf(urlFmt, "rancher/webhook")},
+					{Repo: "wrangler", Branch: "main", Expected: unknownMinor + ".0", WorkflowURL: fmt.Sprintf(urlFmt, "rancher/wrangler")},
+				}},
+				{Layer: 1, Tags: []tag{
+					{Repo: "rancher", Branch: "release/v2.12", Expected: "v2.12.2", WorkflowURL: fmt.Sprintf(urlFmt, "rancher/rancher")},
+				}},
+				{Layer: 2},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newWithDeps(testConfigName, cfg, Settings{}, newFakeGH(ghRepos()), nil)
+			err := r.fillTagPromptHints(context.Background(), tt.stages, tt.leafTable, tt.dependentTables)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("error = %v, want containing %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("fillTagPromptHints: %v", err)
+			}
+			if !reflect.DeepEqual(tt.stages, tt.want) {
+				t.Errorf("stages mismatch:\n  got:  %+v\n  want: %+v", tt.stages, tt.want)
+			}
 		})
 	}
 }
