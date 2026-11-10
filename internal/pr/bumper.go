@@ -73,6 +73,14 @@ type Module struct {
 	// rancher/charts' index.yaml at that ref (branch name, tag, or commit
 	// SHA). Other strategies ignore it.
 	ChartRef string
+
+	// ChartMajor, when non-empty, is exposed to script strategies via the
+	// CHART_MAJOR environment variable. Used by chart-bump-webhook and
+	// chart-bump-remotedialer-proxy to reset the rancher/charts version to
+	// `<ChartMajor>.0.0` when the charts branch is still on an older major
+	// (e.g. right after dev-v2.X is cut from dev-v2.X-1). Other strategies
+	// ignore it.
+	ChartMajor string
 }
 
 type Result struct {

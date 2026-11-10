@@ -228,12 +228,23 @@ func (r *Reconciler) openCascadeStageBumps(ctx context.Context, op *cascade.Op, 
 		if err != nil {
 			return mutated, fmt.Errorf("cascade downstream %s: %w", bp.Repo, err)
 		}
+		modules := bumpModules(bp, chartRef)
+		for j, d := range bp.Deps {
+			if !strategyUsesChartMajor(d.Strategy) {
+				continue
+			}
+			chartMajor, err := r.chartMajorForDep(ctx, d.Dep, d.Version)
+			if err != nil {
+				return mutated, fmt.Errorf("resolve CHART_MAJOR for cascade %s on %s %s: %w", d.Dep, bp.Repo, bp.Branch, err)
+			}
+			modules[j].ChartMajor = chartMajor
+		}
 		req := pr.Request{
 			Repo:        downstreamGH,
 			Fork:        downstream.Fork,
 			BaseBranch:  bp.Branch,
 			HeadBranch:  cascadeBumpBranchName(issueNum, bp.Repo, bp.Branch),
-			Modules:     bumpModules(bp, chartRef),
+			Modules:     modules,
 			TrackerURL:  trackerURL,
 			Assignees:   actorAssignees(op.TriggeredBy),
 			PostBundle:  downstream.PostBundle,

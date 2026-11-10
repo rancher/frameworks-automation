@@ -1,0 +1,36 @@
+# Same shape as tagless_paired_promoted, but on the v2.17/v0.13 branch cut.
+# The chart bump (stage 1) carries chart_major=112 from webhook's
+# default-branch VERSION.md row for v0.13. The rancher bump (bump-webhook)
+# doesn't use CHART_MAJOR.
+
+sources:
+  - {name: webhook, version: v0.13.0-rc.1, explicit: false}
+
+stages:
+  - layer: 1
+    bumps:
+      - repo: chart
+        branch: dev-v2.17
+        deps:
+          - {dep: webhook, module: github.com/x/webhook, version: v0.13.0-rc.1, strategy: chart-bump-webhook}
+    tags: []
+  - layer: 2
+    bumps:
+      - repo: rancher
+        branch: main
+        deps:
+          - {dep: webhook, module: github.com/x/webhook, version: v0.13.0-rc.1, strategy: bump-webhook}
+    tags: []
+
+issue:
+  title: "[cascade:test] rancher main"
+  labels:
+    - cascade-op
+    - "config:test"
+    - "leaf:rancher:main"
+
+prs_opened:
+  - repo: x/chart
+    base: dev-v2.17
+    modules:
+      - {path: github.com/x/webhook, version: v0.13.0-rc.1, chart_major: "112"}

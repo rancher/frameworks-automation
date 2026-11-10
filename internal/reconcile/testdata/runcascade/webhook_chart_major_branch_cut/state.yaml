@@ -1,0 +1,60 @@
+automation_repo: rancher/release-automation
+github_actor: tomleb
+
+# Right after branching: webhook main has its first v0.13 tag, and
+# dev-v2.17 exists in charts (cut from dev-v2.16). webhook's VERSION.md is
+# fetched from its default branch (no inline version-md in the config), as
+# in production.
+trigger:
+  leaf_branch: main
+  independents: {}
+
+modules:
+  rancher: [github.com/x/rancher]
+  webhook: [github.com/x/webhook]
+
+repos:
+  x/rancher:
+    gh_repo: x/rancher
+    default_branch: main
+    tags: [v2.17.0-alpha1]
+    branches:
+      main:
+        files:
+          go.mod: |
+            module github.com/x/rancher
+            go 1.24
+            require github.com/x/webhook v0.12.1
+        ahead_of:
+          v2.17.0-alpha1: 0
+
+  x/chart:
+    gh_repo: x/chart
+    default_branch: dev-v2.17
+    tags: []
+    branches:
+      dev-v2.17:
+        files: {}
+
+  x/webhook:
+    gh_repo: x/webhook
+    default_branch: main
+    tags: [v0.13.0-rc.1, v0.12.1]
+    branches:
+      main:
+        files:
+          go.mod: |
+            module github.com/x/webhook
+            go 1.24
+          VERSION.md: |
+            | Webhook Branch | Webhook Minor version | Rancher Minor Version | Chart Major Version |
+            |----------------|-----------------------|-----------------------|---------------------|
+            | main | v0.13 | v2.17 | 112 |
+            | release/v0.12 | v0.12 | v2.16 | 111 |
+        ahead_of:
+          v0.13.0-rc.1: 0
+    tag_files:
+      v0.13.0-rc.1:
+        go.mod: |
+          module github.com/x/webhook
+          go 1.24

@@ -13,9 +13,17 @@
 #     release.yaml prepend is also gated on "entry not already present" so
 #     a re-run produces no diff.
 #
+# Chart version: when CHART_MAJOR is set (from the "Chart Major Version"
+# column of rancher/remotedialer-proxy's VERSION.md) and package.yaml is on
+# an older major — e.g. a freshly cut dev-v2.X branch still carrying
+# dev-v2.X-1's version — the chart version resets to <CHART_MAJOR>.0.0.
+# Otherwise an rc predecessor keeps the chart version and a GA predecessor
+# bumps the patch. A package.yaml major newer than CHART_MAJOR is an error.
+#
 # Usage: chart-bump-remotedialer-proxy.sh <new-version>
 #   e.g. chart-bump-remotedialer-proxy.sh v0.7.1
 #
+# Optional env: CHART_MAJOR (e.g. 112).
 # Required tools in PATH: yq (v4), make, sed, grep.
 set -euo pipefail
 
@@ -70,7 +78,19 @@ bump_patch() {
     echo "${major}.${minor}.$((patch + 1))"
 }
 
-if echo "$PREV_SHORT" | grep -q -- '-rc'; then
+CHART_MAJOR="${CHART_MAJOR:-}"
+if [[ -n "$CHART_MAJOR" ]] && ! [[ "$CHART_MAJOR" =~ ^[0-9]+$ ]]; then
+    echo "Error: CHART_MAJOR=$CHART_MAJOR must be a number" >&2
+    exit 1
+fi
+PREV_CHART_MAJOR="${PREV_CHART_VERSION%%.*}"
+
+if [[ -n "$CHART_MAJOR" ]] && (( PREV_CHART_MAJOR > CHART_MAJOR )); then
+    echo "Error: $PKG chart version $PREV_CHART_VERSION is newer than CHART_MAJOR=$CHART_MAJOR" >&2
+    exit 1
+elif [[ -n "$CHART_MAJOR" ]] && (( PREV_CHART_MAJOR < CHART_MAJOR )); then
+    NEW_CHART_VERSION="${CHART_MAJOR}.0.0"
+elif echo "$PREV_SHORT" | grep -q -- '-rc'; then
     NEW_CHART_VERSION="$PREV_CHART_VERSION"
 else
     NEW_CHART_VERSION=$(bump_patch "$PREV_CHART_VERSION")
