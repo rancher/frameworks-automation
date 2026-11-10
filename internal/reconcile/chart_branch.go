@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"golang.org/x/mod/semver"
+
 	"github.com/rancher/release-automation/internal/config"
 )
 
@@ -12,6 +14,35 @@ import (
 // rancher/charts' index.yaml.
 func strategyUsesChartRef(s config.Strategy) bool {
 	return s == config.StrategyBumpWebhook || s == config.StrategyBumpRemotedialerProxy
+}
+
+// strategyUsesChartMajor reports whether `s` is a chart-side script strategy
+// that needs CHART_MAJOR to pick the rancher/charts major version.
+func strategyUsesChartMajor(s config.Strategy) bool {
+	return s == config.StrategyChartBumpWebhook || s == config.StrategyChartBumpRemotedialerProxy
+}
+
+// chartMajorForDep returns the rancher/charts major version (e.g. "112") for
+// `dep` at `version`, read from the "Chart Major Version" column of dep's
+// default-branch VERSION.md, using the row whose minor matches version's.
+//
+// Returns ("", nil) when dep's VERSION.md has no chart-major column, so the
+// chart-bump scripts keep their previous behaviour for repos that haven't
+// added it yet. Returns an error when version's minor isn't in the table.
+func (r *Reconciler) chartMajorForDep(ctx context.Context, dep, version string) (string, error) {
+	minor := semver.MajorMinor(version)
+	if minor == "" {
+		return "", fmt.Errorf("invalid semver %q", version)
+	}
+	tbl, err := r.fetchVersionTable(ctx, dep)
+	if err != nil {
+		return "", fmt.Errorf("fetch %s VERSION.md: %w", dep, err)
+	}
+	major, ok := tbl.LookupChartMajor(minor)
+	if !ok {
+		return "", fmt.Errorf("%s minor %s not in VERSION.md", dep, minor)
+	}
+	return major, nil
 }
 
 // chartRefForLeaf returns the rancher/charts branch corresponding to the

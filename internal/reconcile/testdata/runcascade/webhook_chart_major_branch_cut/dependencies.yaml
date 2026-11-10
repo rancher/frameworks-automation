@@ -1,0 +1,26 @@
+# Branch cut: rancher main is now v2.17 and webhook main is v0.13. The
+# webhook VERSION.md carries a "Chart Major Version" column, so the
+# chart-bump-webhook module must get chart_major=112 (CHART_MAJOR), which
+# lets the chart script reset dev-v2.17's inherited 111.x.y to 112.0.0.
+repos:
+  rancher:
+    kind: leaf
+    repo: x/rancher
+    version-md: |
+      | Rancher Branch | Rancher Minor |
+      |---|---|
+      | main | v2.17 |
+      | release/v2.16 | v2.16 |
+    deps:
+      - {name: chart, strategy: order}
+      - {name: webhook, strategy: bump-webhook}
+  chart:
+    kind: paired
+    repo: x/chart
+    branch-template: "dev-{rancher-minor}"
+    deps:
+      - {name: webhook, strategy: chart-bump-webhook}
+  webhook:
+    kind: paired
+    repo: x/webhook
+    deps: []

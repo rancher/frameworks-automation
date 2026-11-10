@@ -17,6 +17,10 @@ type VersionRow struct {
 	// Pair is the third-column value when present (e.g. matching rancher
 	// version "v2.15"). Empty for repos whose table only has 2 columns.
 	Pair string
+	// ChartMajor is the fourth-column value when present: the rancher/charts
+	// major version (e.g. "112") used by this branch's Helm chart. Empty for
+	// repos without a Helm chart in rancher/charts.
+	ChartMajor string
 }
 
 // ParseVersionTable extracts the first markdown table from `content` whose
@@ -25,6 +29,7 @@ type VersionRow struct {
 //
 // Recognized shapes:
 //
+//	| Branch | Minor | Matching X | Chart Major | (4 columns; ChartMajor populated)
 //	| Branch | Minor | Matching X |   (3 columns; Pair populated)
 //	| Branch | Minor |              (2 columns; Pair empty)
 func ParseVersionTable(content string) (*VersionTable, error) {
@@ -54,6 +59,9 @@ func ParseVersionTable(content string) (*VersionTable, error) {
 		row := VersionRow{Branch: cells[0], Minor: cells[1]}
 		if len(cells) >= 3 {
 			row.Pair = cells[2]
+		}
+		if len(cells) >= 4 {
+			row.ChartMajor = cells[3]
 		}
 		t.Rows = append(t.Rows, row)
 	}
@@ -94,6 +102,18 @@ func (t *VersionTable) LookupPair(minor string) string {
 		}
 	}
 	return ""
+}
+
+// LookupChartMajor returns the fourth-column ("ChartMajor") value and true
+// for the row whose Minor matches `minor`. Returns false if no row matches.
+// The value is "" when the table has no ChartMajor column.
+func (t *VersionTable) LookupChartMajor(minor string) (string, bool) {
+	for _, r := range t.Rows {
+		if r.Minor == minor {
+			return r.ChartMajor, true
+		}
+	}
+	return "", false
 }
 
 // BranchForPair is the inverse of LookupPair: given a pair value (a leaf's

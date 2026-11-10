@@ -325,8 +325,9 @@ type expectedPR struct {
 }
 
 type expectedPRModule struct {
-	Path    string `yaml:"path"`
-	Version string `yaml:"version"`
+	Path       string `yaml:"path"`
+	Version    string `yaml:"version"`
+	ChartMajor string `yaml:"chart_major,omitempty"`
 }
 
 func (s stateFixture) repoStates() map[string]*fakeRepoState {
@@ -491,7 +492,7 @@ func assertPRsOpened(t *testing.T, want []expectedPR, got []pr.Request) {
 			if len(c.Modules) > 0 {
 				mods = make([]expectedPRModule, len(c.Modules))
 				for j, m := range c.Modules {
-					mods[j] = expectedPRModule{Path: m.Path, Version: m.Version}
+					mods[j] = expectedPRModule{Path: m.Path, Version: m.Version, ChartMajor: m.ChartMajor}
 				}
 				sort.Slice(mods, func(a, b int) bool { return mods[a].Path < mods[b].Path })
 			}

@@ -134,5 +134,8 @@ func (s scriptStrategy) Apply(ctx context.Context, repoDir string, m Module) err
 	if m.ChartRef != "" {
 		env = append(env, "CHART_REF="+m.ChartRef)
 	}
+	if m.ChartMajor != "" {
+		env = append(env, "CHART_MAJOR="+m.ChartMajor)
+	}
 	return run(ctx, repoDir, env, f.Name(), m.Version)
 }

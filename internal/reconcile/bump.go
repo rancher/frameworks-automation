@@ -136,6 +136,13 @@ func (r *Reconciler) bumpTarget(ctx context.Context, dep, version, leafBranch, d
 		}
 		module.ChartRef = chartRef
 	}
+	if strategyUsesChartMajor(strat) {
+		chartMajor, err := r.chartMajorForDep(ctx, dep, version)
+		if err != nil {
+			return false, fmt.Errorf("resolve CHART_MAJOR for %s on %s: %w", dep, target.Repo, err)
+		}
+		module.ChartMajor = chartMajor
+	}
 	req := pr.Request{
 		Repo:        downstreamGH,
 		Fork:        downstream.Fork,
