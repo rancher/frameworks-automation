@@ -16,12 +16,15 @@
 # Note: the chart package is named `rancher-webhook` (with the rancher-
 # prefix), even though the dep name in dependencies.yaml is `webhook`.
 #
-# Chart version: when CHART_MAJOR is set (from the "Chart Major Version"
-# column of rancher/webhook's VERSION.md) and package.yaml is on an older
-# major — e.g. a freshly cut dev-v2.X branch still carrying dev-v2.X-1's
-# version — the chart version resets to <CHART_MAJOR>.0.0. Otherwise an rc
-# predecessor keeps the chart version and a GA predecessor bumps the patch.
-# A package.yaml major newer than CHART_MAJOR is an error.
+# Chart version: <major>.0.<webhook patch>, the formula of rancher/webhook's
+# .github/workflows/scripts/prepare-chart.sh, so the chart bumped here and the
+# chart webhook stages for the same tag have the same version.
+# The major is CHART_MAJOR (from the "Chart Major Version" column of
+# rancher/webhook's VERSION.md) when package.yaml is on an older major — e.g. a
+# freshly cut dev-v2.X branch still carrying dev-v2.X-1's version — and
+# package.yaml's major otherwise. A package.yaml major newer than CHART_MAJOR
+# is an error, and so is a version older than package.yaml's on the same major
+# (a branch whose old counter is ahead of the upstream patch).
 #
 # Usage: chart-bump-webhook.sh <new-version>
 #   e.g. chart-bump-webhook.sh v0.5.0-rc.14
@@ -71,16 +74,6 @@ if [[ "$PREV_SHORT" == "$NEW_SHORT" ]]; then
     exit 0
 fi
 
-bump_patch() {
-    local v="$1"
-    local major minor patch
-    major="${v%%.*}"
-    local rest="${v#*.}"
-    minor="${rest%%.*}"
-    patch="${rest#*.}"
-    echo "${major}.${minor}.$((patch + 1))"
-}
-
 CHART_MAJOR="${CHART_MAJOR:-}"
 if [[ -n "$CHART_MAJOR" ]] && ! [[ "$CHART_MAJOR" =~ ^[0-9]+$ ]]; then
     echo "Error: CHART_MAJOR=$CHART_MAJOR must be a number" >&2
@@ -92,11 +85,20 @@ if [[ -n "$CHART_MAJOR" ]] && (( PREV_CHART_MAJOR > CHART_MAJOR )); then
     echo "Error: $PKG chart version $PREV_CHART_VERSION is newer than CHART_MAJOR=$CHART_MAJOR" >&2
     exit 1
 elif [[ -n "$CHART_MAJOR" ]] && (( PREV_CHART_MAJOR < CHART_MAJOR )); then
-    NEW_CHART_VERSION="${CHART_MAJOR}.0.0"
-elif echo "$PREV_SHORT" | grep -q -- '-rc'; then
-    NEW_CHART_VERSION="$PREV_CHART_VERSION"
+    NEW_CHART_MAJOR="$CHART_MAJOR"
 else
-    NEW_CHART_VERSION=$(bump_patch "$PREV_CHART_VERSION")
+    NEW_CHART_MAJOR="$PREV_CHART_MAJOR"
+fi
+
+# <major>.0.<webhook patch>, like rancher/webhook's prepare-chart.sh does for
+# the chart it stages, so both carry the same version for the same tag.
+NEW_PATCH="${NEW_SHORT%%-*}"
+NEW_PATCH="${NEW_PATCH##*.}"
+NEW_CHART_VERSION="${NEW_CHART_MAJOR}.0.${NEW_PATCH}"
+if (( NEW_CHART_MAJOR == PREV_CHART_MAJOR )) \
+    && [[ "$(printf '%s\n' "$PREV_CHART_VERSION" "$NEW_CHART_VERSION" | sort -V | head -n1)" != "$PREV_CHART_VERSION" ]]; then
+    echo "Error: chart version $NEW_CHART_VERSION would be older than $PKG chart version $PREV_CHART_VERSION" >&2
+    exit 1
 fi
 
 sed -i "s/${PREV_SHORT}/${NEW_SHORT}/g" "$PKG"
