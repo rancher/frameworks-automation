@@ -2,12 +2,18 @@ name: Cascade (rancher-chart-webhook)
 
 # Specialized cascade for the rancher ← chart ← webhook path. Walks just
 # that sub-DAG to a chosen rancher branch — see
-# dependencies/rancher-chart-webhook.yaml for the DAG.
+# dependencies/rancher-webhook-legacy.yaml for the DAG.
 #
 # webhook is treated as a black box at the bottom of this sub-DAG: the
 # cascade picks it up at its latest paired tag (no explicit-version input
 # needed). For upgrades that need norman/wrangler bundled in the same
 # cascade, use cascade-rancher.yaml against the canonical config.
+#
+# The rancher branches are split between two configs:
+# dependencies/rancher-webhook-legacy.yaml (Rancher 2.15 and older, through
+# rancher/charts dev-v2.X) and dependencies/rancher-webhook.yaml (Rancher
+# 2.16 and later, charts v2: no rancher/charts bump). Both are passed to the
+# reconciler, which runs the one that lists the requested rancher branch.
 
 on:
   workflow_dispatch:
@@ -54,5 +60,5 @@ jobs:
         run: |
           go run ./cmd/reconciler \
             -mode=cascade \
-            -config=rancher-chart-webhook \
+            -config=rancher-webhook-legacy,rancher-webhook \
             -leaf-branch="$RANCHER_BRANCH"

@@ -49,6 +49,8 @@
 #                                     reference until the registry is pruned).
 #   bump-webhook                    - runs the rancher-side webhook bump script
 #                                     (updates build.yaml, runs `go generate`).
+#   bump-webhook-staging            - same, reading the chart version from the
+#                                     charts v2 staging index (Rancher 2.16+).
 #   chart-bump-webhook              - runs the chart-side webhook bump script
 #                                     (updates package.yaml, `make charts`,
 #                                     prepends release.yaml).

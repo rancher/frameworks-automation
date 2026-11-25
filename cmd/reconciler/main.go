@@ -18,9 +18,12 @@
 //	                every config containing the dep.
 //	-mode=cascade   Multi-source cascade onto a chosen leaf branch in one
 //	                specific config. -config is required — different
-//	                specialized cascades (rancher-chart-webhook,
+//	                specialized cascades (rancher-webhook,
 //	                rancher-chart-remotedialer-proxy, …) live in different
 //	                files and produce different cascade tracker issues.
+//	                -config may list several comma-separated configs that
+//	                split the leaf branches between them; the one whose
+//	                leaf version-md lists -leaf-branch runs.
 //	-mode=validate-config
 //	                Parse and validate every dependencies/<name>.yaml; exit
 //	                0 on success, non-zero with the error otherwise. Used by
@@ -53,7 +56,7 @@ func main() {
 		mode          = flag.String("mode", "cron", "cron|dispatch|bump-dep|cascade|validate-config|approve-renovate")
 		configDir     = flag.String("config-dir", "dependencies", "directory containing the per-path *.yaml configs")
 		approveConfig = flag.String("approve-renovate-config", "renovateapprove.yaml", "approve-renovate mode: path to the repo list/policy YAML")
-		configName    = flag.String("config", "", "cascade|bump-dep mode: scope to one config (basename of dependencies/<name>.yaml). Required for cascade; optional for bump-dep (default: every config containing the dep).")
+		configName    = flag.String("config", "", "cascade|bump-dep mode: scope to one config (basename of dependencies/<name>.yaml). Required for cascade, where it may be a comma-separated list: the one config whose leaf lists -leaf-branch runs. Optional for bump-dep (default: every config containing the dep).")
 		repo          = flag.String("repo", "", "dispatch mode: owner/name of repo that emitted the tag")
 		tag           = flag.String("tag", "", "dispatch mode: tag that was emitted (e.g. v0.7.5)")
 		sha           = flag.String("sha", "", "dispatch mode: commit SHA the tag points at")
@@ -128,10 +131,12 @@ func main() {
 		if *leafBranch == "" {
 			log.Fatalf("cascade: -leaf-branch is required")
 		}
-		r, ok := reconcilers[*configName]
-		if !ok {
-			log.Fatalf("cascade: unknown config %q (loaded: %s)", *configName, strings.Join(sortedNames(cfgs), ", "))
+		name, err := pickCascadeConfig(cfgs, strings.Split(*configName, ","), *leafBranch)
+		if err != nil {
+			log.Fatalf("cascade: %v", err)
 		}
+		*configName = name
+		r := reconcilers[*configName]
 		indep, err := parseIndependents(*independents)
 		if err != nil {
 			log.Fatalf("cascade: %v", err)
@@ -149,6 +154,54 @@ func main() {
 		}
 	default:
 		log.Fatalf("unknown mode %q", *mode)
+	}
+}
+
+// pickCascadeConfig returns the one config among `names` whose leaf lists
+// `leafBranch` in its VERSION.md table. A cascade workflow passes several
+// configs that split the rancher branches between them (e.g. webhook with
+// and without the rancher/charts dev-v2.X bump) and the leaf branch decides.
+// A single name is accepted as is, so its errors keep coming from RunCascade.
+//
+// Only inline version-md tables are consulted: a leaf with a fetched
+// VERSION.md can't be checked before the reconcilers start, so such a config
+// is an error when more than one name is given.
+func pickCascadeConfig(cfgs map[string]*config.Config, names []string, leafBranch string) (string, error) {
+	for i := range names {
+		names[i] = strings.TrimSpace(names[i])
+		if _, ok := cfgs[names[i]]; !ok {
+			return "", fmt.Errorf("unknown config %q (loaded: %s)", names[i], strings.Join(sortedNames(cfgs), ", "))
+		}
+	}
+	if len(names) == 1 {
+		return names[0], nil
+	}
+	var matched []string
+	for _, name := range names {
+		leaves := cfgs[name].LeafRepos()
+		if len(leaves) != 1 {
+			return "", fmt.Errorf("config %q: expected exactly one leaf repo, found %v", name, leaves)
+		}
+		md := cfgs[name].Repos[leaves[0]].VersionMD
+		if md == "" {
+			return "", fmt.Errorf("config %q: leaf has no inline version-md, so it can't be picked by leaf branch", name)
+		}
+		tbl, err := config.ParseVersionTable(md)
+		if err != nil {
+			return "", fmt.Errorf("config %q: %w", name, err)
+		}
+		if tbl.LookupMinor(leafBranch) != "" {
+			matched = append(matched, name)
+		}
+	}
+	switch len(matched) {
+	case 1:
+		log.Printf("cascade: leaf branch %s is in config %s", leafBranch, matched[0])
+		return matched[0], nil
+	case 0:
+		return "", fmt.Errorf("leaf branch %q is in none of the configs %s", leafBranch, strings.Join(names, ", "))
+	default:
+		return "", fmt.Errorf("leaf branch %q is in more than one config: %s", leafBranch, strings.Join(matched, ", "))
 	}
 }
 

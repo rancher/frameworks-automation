@@ -2,7 +2,7 @@ name: UnRC webhook
 
 # Cuts the GA tag for the in-flight webhook rc and propagates it through
 # chart into rancher. This is the same DAG as
-# cascade-rancher-chart-webhook.yaml — only the cascade-mid prompt for
+# cascade-rancher-webhook-legacy.yaml — only the cascade-mid prompt for
 # webhook differs: instead of suggesting the next rc (v0.9.0-rc.5), this
 # workflow asks for the rc-stripped GA tag (v0.9.0-rc.4 → v0.9.0). Pick
 # this workflow when the team is ready to unRC; pick the cascade-* variant
@@ -12,6 +12,13 @@ name: UnRC webhook
 # cascade picks it up at its latest paired tag (no explicit-version input
 # needed). The operator still cuts the actual tag in webhook's own Release
 # workflow — the reconciler only suggests it.
+#
+# The rancher branches are split between two configs:
+# dependencies/rancher-webhook-legacy-unrc.yaml (Rancher 2.15 and older,
+# through rancher/charts dev-v2.X) and dependencies/rancher-webhook-unrc.yaml
+# (Rancher 2.16 and later, charts v2: no rancher/charts bump). Both are passed
+# to the reconciler, which runs the one that lists the requested rancher
+# branch.
 
 on:
   workflow_dispatch:
@@ -58,5 +65,5 @@ jobs:
         run: |
           go run ./cmd/reconciler \
             -mode=cascade \
-            -config=rancher-chart-webhook-unrc \
+            -config=rancher-webhook-legacy-unrc,rancher-webhook-unrc \
             -leaf-branch="$RANCHER_BRANCH"

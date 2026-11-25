@@ -74,6 +74,13 @@ type Module struct {
 	// SHA). Other strategies ignore it.
 	ChartRef string
 
+	// RancherMinor, when non-empty, is exposed to script strategies via the
+	// RANCHER_MINOR environment variable (e.g. "2.17"). The charts v2 staging
+	// index lists the charts of every Rancher release line, so
+	// bump-webhook-staging picks the entry whose
+	// catalog.cattle.io/rancher-version annotation starts at that minor.
+	RancherMinor string
+
 	// ChartMajor, when non-empty, is exposed to script strategies via the
 	// CHART_MAJOR environment variable. Used by chart-bump-webhook and
 	// chart-bump-remotedialer-proxy to reset the rancher/charts version to

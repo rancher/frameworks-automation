@@ -147,6 +147,9 @@ to `go-get` if omitted. Strategies in the registry today:
   unreferenced; retained until the registry is pruned.
 - `bump-webhook` — runs the embedded `bump-webhook.sh` against the rancher
   clone (updates `build.yaml`, runs `go generate`).
+- `bump-webhook-staging` — runs the embedded `bump-webhook-staging.sh`
+  against the rancher clone: same edit as `bump-webhook`, with the chart
+  version read from the charts v2 `staging` index for `RANCHER_MINOR`.
 - `chart-bump-webhook` — runs the embedded `chart-bump-webhook.sh` against
   the chart clone (updates `packages/rancher-webhook/package.yaml`, runs
   `make charts`, prepends `release.yaml`).
@@ -177,6 +180,33 @@ only recognized placeholder is `{rancher-minor}`, filled from the leaf rancher
 branch's own VERSION.md row (e.g. `main → v2.16`). Note: the placeholder
 expands to the value with the `v` prefix, so `dev-{rancher-minor}` →
 `dev-v2.16`, not `dev-v{rancher-minor}`.
+
+**Charts v2 split.** From Rancher 2.16 on, a component's release workflow
+stages its chart, rancher/charts indexes it on its `staging` branch, and
+there is no `dev-v2.X` branch to bump. Each webhook cascade therefore has two
+configs that split the rancher branches between them:
+
+```
+config                                          rancher branches        DAG
+rancher-webhook-legacy(-unrc).yaml              release/v2.15 and older webhook → chart (dev-v2.X) → rancher
+rancher-webhook(-unrc).yaml                     main, release/v2.16     webhook → rancher (bump-webhook-staging)
+```
+
+A webhook tag lands in whichever config lists the rancher minor it pairs
+with (pass 1 skips a config whose leaf table doesn't list it). The cascade
+workflows pass both configs as `-config=a,b`, and the reconciler runs the
+one whose leaf `version-md` lists `-leaf-branch`. A new rancher minor goes
+in the charts v2 config only.
+
+The legacy and charts v2 configs use separate rancher-side strategies, so
+the legacy ones can be deleted together with the legacy configs:
+
+- `bump-webhook` (legacy) reads rancher/charts' `index.yaml` on `CHART_REF`,
+  the chart repo's `dev-v2.X` branch for the leaf minor.
+- `bump-webhook-staging` (charts v2) reads the `staging` index, which holds
+  every Rancher release line. It gets `RANCHER_MINOR` (the leaf minor
+  without the `v`, e.g. `2.17`) and only considers the entries whose
+  `catalog.cattle.io/rancher-version` starts at it (`>= 2.17.0-0 < 2.18.0-0`).
 
 ### `VERSION.md` (in each managed repo)
 

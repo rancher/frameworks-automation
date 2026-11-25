@@ -328,6 +328,9 @@ type expectedPRModule struct {
 	Path       string `yaml:"path"`
 	Version    string `yaml:"version"`
 	ChartMajor string `yaml:"chart_major,omitempty"`
+	ChartRef   string `yaml:"chart_ref,omitempty"`
+	// RancherMinor is RANCHER_MINOR, set for bump-webhook-staging.
+	RancherMinor string `yaml:"rancher_minor,omitempty"`
 }
 
 func (s stateFixture) repoStates() map[string]*fakeRepoState {
@@ -492,7 +495,7 @@ func assertPRsOpened(t *testing.T, want []expectedPR, got []pr.Request) {
 			if len(c.Modules) > 0 {
 				mods = make([]expectedPRModule, len(c.Modules))
 				for j, m := range c.Modules {
-					mods[j] = expectedPRModule{Path: m.Path, Version: m.Version, ChartMajor: m.ChartMajor}
+					mods[j] = expectedPRModule{Path: m.Path, Version: m.Version, ChartMajor: m.ChartMajor, ChartRef: m.ChartRef, RancherMinor: m.RancherMinor}
 				}
 				sort.Slice(mods, func(a, b int) bool { return mods[a].Path < mods[b].Path })
 			}
