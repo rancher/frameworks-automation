@@ -207,11 +207,19 @@ func (r *Reconciler) openCascadeStageBumps(ctx context.Context, op *cascade.Op, 
 		return false, nil
 	}
 	chartRef := ""
-	if stageNeedsChartRef(op.Stages[stage]) {
+	if stageUses(op.Stages[stage], strategyUsesChartRef) {
 		var err error
 		chartRef, err = r.chartRefForLeaf(ctx, op.LeafBranch)
 		if err != nil {
 			return false, fmt.Errorf("resolve CHART_REF for cascade stage %d: %w", stage, err)
+		}
+	}
+	rancherMinor := ""
+	if stageUses(op.Stages[stage], strategyUsesRancherMinor) {
+		var err error
+		rancherMinor, err = r.rancherMinorForLeaf(ctx, op.LeafBranch)
+		if err != nil {
+			return false, fmt.Errorf("resolve RANCHER_MINOR for cascade stage %d: %w", stage, err)
 		}
 	}
 	mutated := false
@@ -228,7 +236,7 @@ func (r *Reconciler) openCascadeStageBumps(ctx context.Context, op *cascade.Op, 
 		if err != nil {
 			return mutated, fmt.Errorf("cascade downstream %s: %w", bp.Repo, err)
 		}
-		modules := bumpModules(bp, chartRef)
+		modules := bumpModules(bp, chartRef, rancherMinor)
 		for j, d := range bp.Deps {
 			if !strategyUsesChartMajor(d.Strategy) {
 				continue
@@ -415,25 +423,28 @@ func bumpReady(bp *cascade.Bump) bool {
 	return true
 }
 
-func bumpModules(bp *cascade.Bump, chartRef string) []pr.Module {
+func bumpModules(bp *cascade.Bump, chartRef, rancherMinor string) []pr.Module {
 	out := make([]pr.Module, len(bp.Deps))
 	for i, d := range bp.Deps {
 		m := pr.Module{Path: d.Module, Version: d.Version, Strategy: d.Strategy}
 		if strategyUsesChartRef(d.Strategy) {
 			m.ChartRef = chartRef
 		}
+		if strategyUsesRancherMinor(d.Strategy) {
+			m.RancherMinor = rancherMinor
+		}
 		out[i] = m
 	}
 	return out
 }
 
-// stageNeedsChartRef reports whether any bump in `stage` uses a strategy
-// that needs CHART_REF. Used to skip the resolver call when no module in
-// the stage will consume it.
-func stageNeedsChartRef(stage cascade.Stage) bool {
+// stageUses reports whether any bump in `stage` has a dep whose strategy
+// satisfies `uses` (e.g. strategyUsesChartRef). Used to skip a resolver call
+// when no module in the stage will consume its value.
+func stageUses(stage cascade.Stage, uses func(config.Strategy) bool) bool {
 	for _, bp := range stage.Bumps {
 		for _, d := range bp.Deps {
-			if strategyUsesChartRef(d.Strategy) {
+			if uses(d.Strategy) {
 				return true
 			}
 		}

@@ -21,6 +21,9 @@ var ChartBump string
 //go:embed bump-webhook.sh
 var BumpWebhook string
 
+//go:embed bump-webhook-staging.sh
+var BumpWebhookStaging string
+
 //go:embed chart-bump-webhook.sh
 var ChartBumpWebhook string
 

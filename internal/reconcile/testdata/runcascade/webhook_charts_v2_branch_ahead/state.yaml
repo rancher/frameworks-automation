@@ -1,0 +1,46 @@
+automation_repo: rancher/release-automation
+github_actor: tomleb
+
+# release/v2.16, with webhook release/v0.12 one commit past its latest rc:
+# the cascade asks for a new webhook tag, then bumps rancher. There is no
+# rancher/charts stage between the two.
+trigger:
+  leaf_branch: release/v2.16
+  independents: {}
+
+modules:
+  rancher: [github.com/x/rancher]
+  webhook: [github.com/x/webhook]
+
+repos:
+  x/rancher:
+    gh_repo: x/rancher
+    default_branch: main
+    tags: [v2.16.0]
+    branches:
+      release/v2.16:
+        files:
+          go.mod: |
+            module github.com/x/rancher
+            go 1.24
+            require github.com/x/webhook v0.12.1-rc.21
+        ahead_of:
+          v2.16.0: 0
+
+  x/webhook:
+    gh_repo: x/webhook
+    default_branch: main
+    tags: [v0.12.1-rc.22, v0.12.0]
+    branches:
+      release/v0.12:
+        files:
+          go.mod: |
+            module github.com/x/webhook
+            go 1.24
+        ahead_of:
+          v0.12.1-rc.22: 1
+    tag_files:
+      v0.12.1-rc.22:
+        go.mod: |
+          module github.com/x/webhook
+          go 1.24

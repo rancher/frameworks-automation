@@ -1,0 +1,40 @@
+# Specialized cascade DAG: rancher ← webhook, for Rancher 2.16 and later
+# (charts v2), unRC variant.
+#
+# Identical to dependencies/rancher-webhook.yaml except webhook's
+# next-tag-strategy is unrc: the cascade-mid prompt asks for the GA tag
+# stripped of the rc.N suffix (v0.13.0-rc.4 → v0.13.0). Triggered by
+# .github/workflows/unrc-webhook.yaml.
+#
+# webhook's release workflow stages the rancher-webhook chart, and
+# rancher/charts indexes it on its staging branch. There is no rancher/charts
+# dev-v2.X branch to bump, so the cascade goes straight from the webhook tag
+# to the rancher bump, and bump-webhook-staging reads the chart version from
+# the staging index.
+#
+# Rancher 2.15 and older, which still bump rancher/charts, are in
+# dependencies/rancher-webhook-legacy-unrc.yaml. Each rancher branch is listed in
+# exactly one of the two, so a webhook tag lands in one config only. Add a
+# new rancher minor here when rancher branches.
+#
+# Use .github/workflows/unrc-webhook.yaml, which picks
+# whichever config lists the requested rancher branch.
+
+repos:
+  rancher:
+    kind: leaf
+    repo: rancher/rancher
+    token-env: GH_TOKEN_RANCHER
+    version-md: |
+      | Rancher Branch | Rancher Minor |
+      |----------------|---------------|
+      | main           | v2.17         |
+      | release/v2.16  | v2.16         |
+    deps:
+      - {name: webhook, strategy: bump-webhook-staging}
+  webhook:
+    kind: paired
+    repo: rancher/webhook
+    token-env: GH_TOKEN_WEBHOOK
+    next-tag-strategy: unrc
+    deps: []

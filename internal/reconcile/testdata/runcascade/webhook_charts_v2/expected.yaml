@@ -1,0 +1,28 @@
+# One stage: the rancher bump, opened right away with RANCHER_MINOR=2.17, which
+# bump-webhook-staging uses to pick the v2.17 entry out of the staging index.
+# No CHART_REF: the strategy always reads staging.
+
+sources:
+  - {name: webhook, version: v0.13.0-rc.11, explicit: false}
+
+stages:
+  - layer: 1
+    bumps:
+      - repo: rancher
+        branch: main
+        deps:
+          - {dep: webhook, module: github.com/x/webhook, version: v0.13.0-rc.11, strategy: bump-webhook-staging}
+    tags: []
+
+issue:
+  title: "[cascade:test] rancher main"
+  labels:
+    - cascade-op
+    - "config:test"
+    - "leaf:rancher:main"
+
+prs_opened:
+  - repo: x/rancher
+    base: main
+    modules:
+      - {path: github.com/x/webhook, version: v0.13.0-rc.11, rancher_minor: "2.17"}

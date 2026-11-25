@@ -1,0 +1,26 @@
+# Two stages: tag webhook (the rc hint is v0.12.1-rc.23), then the rancher
+# bump, which waits for that tag. No rancher/charts stage in between.
+
+sources: []
+
+stages:
+  - layer: 1
+    bumps: []
+    tags:
+      - {repo: webhook, branch: release/v0.12, expected: v0.12.1-rc.23}
+  - layer: 2
+    bumps:
+      - repo: rancher
+        branch: release/v2.16
+        deps:
+          - {dep: webhook, module: github.com/x/webhook, version: "", strategy: bump-webhook-staging}
+    tags: []
+
+issue:
+  title: "[cascade:test] rancher release/v2.16"
+  labels:
+    - cascade-op
+    - "config:test"
+    - "leaf:rancher:release/v2.16"
+
+prs_opened: []

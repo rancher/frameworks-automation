@@ -1,0 +1,24 @@
+# rancher ← webhook, mirroring dependencies/rancher-webhook.yaml: charts v2
+# rancher minors and no chart repo; bump-webhook-staging reads the chart
+# version from the rancher/charts staging index.
+repos:
+  rancher:
+    kind: leaf
+    repo: x/rancher
+    version-md: |
+      | Rancher Branch | Rancher Minor |
+      |---|---|
+      | main | v2.17 |
+      | release/v2.16 | v2.16 |
+    deps:
+      - {name: webhook, strategy: bump-webhook-staging}
+  webhook:
+    kind: paired
+    repo: x/webhook
+    next-tag-strategy: rc
+    version-md: |
+      | Webhook Branch | Webhook Minor | Matching Rancher Version |
+      |---|---|---|
+      | main | v0.13 | v2.17 |
+      | release/v0.12 | v0.12 | v2.16 |
+    deps: []

@@ -1,6 +1,6 @@
 # Specialized cascade DAG: rancher ← chart ← webhook (unRC variant).
 #
-# Identical to dependencies/rancher-chart-webhook.yaml except webhook's
+# Identical to dependencies/rancher-webhook-legacy.yaml except webhook's
 # next-tag-strategy is unrc — the cascade-mid prompt asks for the GA tag
 # stripped of the rc.N suffix (v0.9.0-rc.4 → v0.9.0) instead of the next
 # rc. Triggered manually by .github/workflows/unrc-webhook.yaml when the
@@ -13,6 +13,12 @@
 #
 # webhook is treated as a black box at the bottom of this sub-DAG: its
 # own go.mod deps (norman, wrangler) are intentionally omitted.
+#
+# Rancher 2.15 and older only. From Rancher 2.16 on, webhook's release
+# workflow stages its chart (charts v2) and there is no rancher/charts
+# dev-v2.X branch to bump: those rancher branches live in
+# dependencies/rancher-webhook.yaml (and -unrc.yaml). A webhook tag lands
+# in whichever config lists the rancher minor it pairs with.
 
 repos:
   rancher:
@@ -22,8 +28,6 @@ repos:
     version-md: |
       | Rancher Branch | Rancher Minor |
       |----------------|---------------|
-      | main           | v2.17         |
-      | release/v2.16  | v2.16         |
       | release/v2.15  | v2.15         |
       | release/v2.14  | v2.14         |
       | release/v2.13  | v2.13         |

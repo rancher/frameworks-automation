@@ -28,6 +28,7 @@ var strategies = map[config.Strategy]Strategy{
 	config.StrategyGoGet:                      goGetStrategy{},
 	config.StrategyChartBump:                  scriptStrategy{name: "chart-bump", body: scripts.ChartBump},
 	config.StrategyBumpWebhook:                scriptStrategy{name: "bump-webhook", body: scripts.BumpWebhook},
+	config.StrategyBumpWebhookStaging:         scriptStrategy{name: "bump-webhook-staging", body: scripts.BumpWebhookStaging},
 	config.StrategyChartBumpWebhook:           scriptStrategy{name: "chart-bump-webhook", body: scripts.ChartBumpWebhook},
 	config.StrategyBumpRemotedialerProxy:      scriptStrategy{name: "bump-remotedialer-proxy", body: scripts.BumpRemotedialerProxy},
 	config.StrategyChartBumpRemotedialerProxy: scriptStrategy{name: "chart-bump-remotedialer-proxy", body: scripts.ChartBumpRemotedialerProxy},
@@ -133,6 +134,9 @@ func (s scriptStrategy) Apply(ctx context.Context, repoDir string, m Module) err
 	env := toolchainEnv(repoDir)
 	if m.ChartRef != "" {
 		env = append(env, "CHART_REF="+m.ChartRef)
+	}
+	if m.RancherMinor != "" {
+		env = append(env, "RANCHER_MINOR="+m.RancherMinor)
 	}
 	if m.ChartMajor != "" {
 		env = append(env, "CHART_MAJOR="+m.ChartMajor)

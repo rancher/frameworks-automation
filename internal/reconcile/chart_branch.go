@@ -3,6 +3,7 @@ package reconcile
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"golang.org/x/mod/semver"
 
@@ -14,6 +15,33 @@ import (
 // rancher/charts' index.yaml.
 func strategyUsesChartRef(s config.Strategy) bool {
 	return s == config.StrategyBumpWebhook || s == config.StrategyBumpRemotedialerProxy
+}
+
+// strategyUsesRancherMinor reports whether `s` is a rancher-side script
+// strategy that reads the charts v2 staging index and needs RANCHER_MINOR to
+// pick the entry of the leaf's Rancher release line out of it.
+func strategyUsesRancherMinor(s config.Strategy) bool {
+	return s == config.StrategyBumpWebhookStaging
+}
+
+// rancherMinorForLeaf returns the Rancher minor of `leafBranch` without the
+// "v" (e.g. "2.17"), as RANCHER_MINOR. The charts v2 staging index lists
+// every Rancher release line; its catalog.cattle.io/rancher-version
+// annotations use bare versions (">= 2.17.0-0 < 2.18.0-0").
+func (r *Reconciler) rancherMinorForLeaf(ctx context.Context, leafBranch string) (string, error) {
+	leaves := r.cfg.LeafRepos()
+	if len(leaves) != 1 {
+		return "", fmt.Errorf("expected exactly one leaf repo, found %d: %v", len(leaves), leaves)
+	}
+	leafTable, err := r.fetchVersionTable(ctx, leaves[0])
+	if err != nil {
+		return "", fmt.Errorf("fetch leaf VERSION.md: %w", err)
+	}
+	leafMinor := leafTable.LookupMinor(leafBranch)
+	if leafMinor == "" {
+		return "", fmt.Errorf("leaf branch %q not in VERSION.md", leafBranch)
+	}
+	return strings.TrimPrefix(leafMinor, "v"), nil
 }
 
 // strategyUsesChartMajor reports whether `s` is a chart-side script strategy

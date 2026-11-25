@@ -136,6 +136,13 @@ func (r *Reconciler) bumpTarget(ctx context.Context, dep, version, leafBranch, d
 		}
 		module.ChartRef = chartRef
 	}
+	if strategyUsesRancherMinor(strat) {
+		rancherMinor, err := r.rancherMinorForLeaf(ctx, leafBranch)
+		if err != nil {
+			return false, fmt.Errorf("resolve RANCHER_MINOR for %s on %s: %w", dep, target.Repo, err)
+		}
+		module.RancherMinor = rancherMinor
+	}
 	if strategyUsesChartMajor(strat) {
 		chartMajor, err := r.chartMajorForDep(ctx, dep, version)
 		if err != nil {

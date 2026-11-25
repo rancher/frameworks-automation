@@ -58,6 +58,7 @@ const (
 	StrategyGoGet                      Strategy = "go-get"
 	StrategyChartBump                  Strategy = "chart-bump"
 	StrategyBumpWebhook                Strategy = "bump-webhook"
+	StrategyBumpWebhookStaging         Strategy = "bump-webhook-staging"
 	StrategyChartBumpWebhook           Strategy = "chart-bump-webhook"
 	StrategyBumpRemotedialerProxy      Strategy = "bump-remotedialer-proxy"
 	StrategyChartBumpRemotedialerProxy Strategy = "chart-bump-remotedialer-proxy"
@@ -310,6 +311,7 @@ func knownStrategy(s Strategy) bool {
 	case StrategyGoGet,
 		StrategyChartBump,
 		StrategyBumpWebhook,
+		StrategyBumpWebhookStaging,
 		StrategyChartBumpWebhook,
 		StrategyBumpRemotedialerProxy,
 		StrategyChartBumpRemotedialerProxy,
